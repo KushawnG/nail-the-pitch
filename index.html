@@ -1,0 +1,2318 @@
+<meta charset="utf-8">
+<title>Nail the Pitch</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Nail the Pitch">
+<link rel="apple-touch-icon" href="assets/icon.png">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0e1116">
+<style>
+  :root {
+    --bg: #0e1116;
+    --panel: #161a21;
+    --panel-raised: #20252e;
+    --lane-natural: #1a1e26;
+    --lane-accidental: #12151b;
+    --grid: #262c36;
+    --grid-octave: #3d475700;
+    --text: #eceff4;
+    --text-dim: #8e98a7;
+    --text-faint: #5a6372;
+    --accent: #6ea8fe;
+    --record: #f25553;
+    --in-tune: #3fd68c;
+    --slightly-off: #f2c14e;
+    --off: #f2655c;
+    --keyboard-width: 58px;
+  }
+
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+  html, body {
+    height: 100%;
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    overscroll-behavior: none;
+  }
+
+  #app {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ---------- status strip ---------- */
+
+  #status {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    background: var(--panel);
+    flex: 0 0 auto;
+  }
+
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 11px;
+    border: none;
+    border-radius: 999px;
+    background: var(--panel-raised);
+    color: var(--text-dim);
+    font: 600 13px/1 ui-rounded, -apple-system, system-ui, sans-serif;
+    font-variant-numeric: tabular-nums;
+    cursor: pointer;
+  }
+  .pill:active { transform: scale(0.97); }
+  .pill.highlight { background: rgba(110, 168, 254, 0.16); color: var(--accent); }
+  .pill.ghost { background: transparent; color: var(--text-faint); }
+
+  #take-time {
+    display: none;
+    align-items: center;
+    gap: 5px;
+    color: var(--record);
+    font: 500 12px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  #take-time.visible { display: inline-flex; }
+  #take-time .dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--record);
+    animation: pulse 1.4s ease-in-out infinite;
+  }
+  @keyframes pulse { 50% { opacity: 0.25; } }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+
+  .spacer { flex: 1 1 auto; }
+
+  /* ---------- roll ---------- */
+
+  #roll-area {
+    flex: 1 1 auto;
+    display: flex;
+    min-height: 0;
+    position: relative;
+  }
+  #roll-area > canvas {
+    display: block;
+    height: 100%;
+    min-width: 0;
+    min-height: 0;
+    touch-action: none;
+  }
+  #keyboard {
+    flex: 0 0 var(--keyboard-width);
+    width: var(--keyboard-width);
+    background: var(--panel);
+  }
+  #roll {
+    flex: 1 1 auto;
+    /* Zero basis plus grow: the box is decided by the flex line, never by the
+       canvas's own intrinsic size. */
+    width: 0;
+    background: var(--bg);
+  }
+
+  #hint {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    text-align: center;
+    pointer-events: none;
+    transition: opacity 0.4s;
+    padding: 0 24px;
+  }
+  #hint h2 {
+    margin: 0 0 6px;
+    font: 600 17px/1.3 ui-rounded, -apple-system, system-ui, sans-serif;
+    color: var(--text);
+  }
+  #hint p {
+    margin: 0;
+    font: 400 13px/1.5 -apple-system, system-ui, sans-serif;
+    color: var(--text-faint);
+    max-width: 320px;
+  }
+  #hint.hidden { opacity: 0; }
+  #hint { pointer-events: none; }
+  #hint #start-btn { pointer-events: auto; }
+
+  #start-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+    margin-bottom: 14px;
+    padding: 13px 22px;
+    border: none;
+    border-radius: 999px;
+    background: var(--accent);
+    color: #0b1220;
+    font: 600 16px/1 -apple-system, system-ui, sans-serif;
+    cursor: pointer;
+  }
+  #start-btn svg { width: 19px; height: 19px; fill: currentColor; }
+  #start-btn:active { transform: scale(0.97); }
+  #start-btn:disabled { opacity: 0.6; cursor: default; }
+  #start-btn:focus-visible { outline: 3px solid var(--text); outline-offset: 3px; }
+
+  #mic-btn.listening { background: rgba(63, 214, 140, 0.18); color: var(--in-tune); }
+  #mic-btn.busy { opacity: 0.6; }
+
+  /* ---------- readout ---------- */
+
+  #readout {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 11px 16px;
+    background: var(--panel);
+  }
+
+  #note-block {
+    display: flex;
+    align-items: baseline;
+    gap: 2px;
+    min-width: 92px;
+  }
+  #note-name {
+    font: 600 42px/1 ui-rounded, -apple-system, system-ui, sans-serif;
+    color: var(--text-faint);
+  }
+  #note-name:not(.active) { font-size: 26px; }
+  #note-name.active { color: var(--text); }
+  #note-octave {
+    font: 500 21px/1 ui-rounded, -apple-system, system-ui, sans-serif;
+    color: var(--text-dim);
+  }
+
+  .divider { width: 1px; height: 52px; background: var(--grid); flex: 0 0 auto; }
+
+  #cents-block { display: flex; flex-direction: column; gap: 6px; }
+  #cents-text {
+    font: 600 15px/1 ui-rounded, -apple-system, system-ui, sans-serif;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-faint);
+  }
+  #cents-bar {
+    position: relative;
+    width: 170px; height: 10px;
+    border-radius: 999px;
+    background: var(--panel-raised);
+    overflow: hidden;
+  }
+  #cents-window {
+    position: absolute; top: 0; bottom: 0;
+    background: rgba(63, 214, 140, 0.18);
+  }
+  #cents-centre {
+    position: absolute; top: 0; bottom: 0;
+    width: 1px; left: 50%;
+    background: var(--text-faint);
+  }
+  #cents-dot {
+    position: absolute; top: 50%;
+    width: 13px; height: 13px;
+    margin: -6.5px 0 0 -6.5px;
+    border-radius: 50%;
+    background: var(--in-tune);
+    transition: left 0.05s linear, background-color 0.12s linear;
+    opacity: 0;
+  }
+  #cents-dot.visible { opacity: 1; }
+
+  #freq-block {
+    margin-left: auto;
+    text-align: right;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    align-items: flex-end;
+  }
+  #freq-measured {
+    font: 500 14px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-variant-numeric: tabular-nums;
+    color: var(--text);
+  }
+  #freq-target {
+    font: 400 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-faint);
+  }
+  #level {
+    width: 68px; height: 4px;
+    border-radius: 999px;
+    background: var(--panel-raised);
+    overflow: hidden;
+    margin-top: 2px;
+  }
+  #level > div {
+    height: 100%;
+    width: 0%;
+    background: var(--accent);
+    border-radius: 999px;
+  }
+
+  /* ---------- transport ---------- */
+
+  #transport {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 10px 20px calc(10px + env(safe-area-inset-bottom));
+    background: var(--panel);
+  }
+
+  .tbtn {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+    border: none;
+    background: none;
+    color: var(--text-dim);
+    font: 500 9px/1 -apple-system, system-ui, sans-serif;
+    cursor: pointer;
+    min-width: 42px;
+    padding: 0;
+  }
+  .tbtn svg { width: 19px; height: 19px; fill: currentColor; }
+  .tbtn:disabled { opacity: 0.32; cursor: default; }
+  .tbtn:active:not(:disabled) { color: var(--text); }
+
+  #record-btn {
+    width: 52px; height: 52px;
+    border-radius: 50%;
+    border: 2px solid var(--text-dim);
+    background: none;
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+    padding: 0;
+    margin: 0 auto;
+  }
+  #record-btn .inner {
+    width: 36px; height: 36px;
+    border-radius: 50%;
+    background: var(--record);
+    transition: border-radius 0.18s, width 0.18s, height 0.18s;
+  }
+  #record-btn.recording { border-color: var(--record); }
+  #record-btn.recording .inner { width: 19px; height: 19px; border-radius: 4px; }
+  #record-btn:disabled { opacity: 0.4; cursor: default; }
+
+  /* ---------- sheet ---------- */
+
+  #scrim {
+    position: fixed; inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.22s;
+    z-index: 10;
+  }
+  #scrim.open { opacity: 1; pointer-events: auto; }
+
+  #sheet {
+    position: fixed;
+    left: 0; right: 0; bottom: 0;
+    max-height: 88%;
+    overflow-y: auto;
+    background: var(--bg);
+    border-radius: 16px 16px 0 0;
+    transform: translateY(100%);
+    transition: transform 0.26s cubic-bezier(0.32, 0.72, 0, 1);
+    z-index: 11;
+    padding-bottom: calc(20px + env(safe-area-inset-bottom));
+    -webkit-overflow-scrolling: touch;
+  }
+  #sheet.open { transform: translateY(0); }
+
+  #sheet header {
+    position: sticky; top: 0;
+    display: flex; align-items: center;
+    padding: 14px 18px;
+    background: var(--bg);
+    border-bottom: 1px solid var(--grid);
+  }
+  #sheet header h1 {
+    margin: 0;
+    font: 600 16px/1 ui-rounded, -apple-system, system-ui, sans-serif;
+  }
+  #sheet header button {
+    margin-left: auto;
+    border: none; background: none;
+    color: var(--accent);
+    font: 600 15px/1 -apple-system, system-ui, sans-serif;
+    cursor: pointer;
+  }
+
+  .card {
+    margin: 14px 16px;
+    padding: 14px;
+    background: var(--panel);
+    border-radius: 12px;
+  }
+  .card h3 {
+    margin: 0 0 10px;
+    font: 500 13px/1 -apple-system, system-ui, sans-serif;
+    color: var(--text-dim);
+  }
+
+  .preset {
+    display: flex; align-items: center; gap: 13px;
+    width: 100%;
+    margin-bottom: 9px;
+    padding: 13px;
+    border: 1.5px solid transparent;
+    border-radius: 12px;
+    background: var(--panel);
+    text-align: left;
+    cursor: pointer;
+    color: inherit;
+  }
+  .preset:last-child { margin-bottom: 0; }
+  .preset.selected { border-color: rgba(110, 168, 254, 0.6); }
+  .preset .radio {
+    flex: 0 0 auto;
+    width: 19px; height: 19px;
+    border-radius: 50%;
+    border: 2px solid var(--text-faint);
+  }
+  .preset.selected .radio {
+    border-color: var(--accent);
+    background: radial-gradient(circle, var(--accent) 0 45%, transparent 48%);
+  }
+  .preset .title {
+    font: 600 16px/1.2 ui-rounded, -apple-system, system-ui, sans-serif;
+    color: var(--text);
+  }
+  .preset .subtitle {
+    margin-top: 2px;
+    font: 400 12.5px/1.3 -apple-system, system-ui, sans-serif;
+    color: var(--text-dim);
+  }
+
+  .row {
+    display: flex; align-items: center;
+    gap: 10px;
+    font: 400 13px/1.4 -apple-system, system-ui, sans-serif;
+    color: var(--text-dim);
+    padding: 3px 0;
+  }
+  .row .label {
+    font: 600 14px/1 ui-rounded, -apple-system, system-ui, sans-serif;
+    color: var(--text);
+    width: 42px;
+  }
+  .row .value {
+    font: 400 13px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--text);
+  }
+  .row .compare {
+    margin-left: auto;
+    font: 400 11.5px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--text-faint);
+  }
+
+  input[type=range] {
+    width: 100%;
+    accent-color: var(--accent);
+  }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 10px; }
+  .chip {
+    border: none;
+    padding: 6px 10px;
+    border-radius: 999px;
+    background: var(--panel-raised);
+    color: var(--text-dim);
+    font: 500 12.5px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+    cursor: pointer;
+  }
+  .chip.selected { background: var(--accent); color: var(--bg); }
+
+  .seg { display: flex; background: var(--panel-raised); border-radius: 9px; padding: 2px; }
+  .seg button {
+    flex: 1;
+    border: none; background: none;
+    padding: 7px 0;
+    border-radius: 7px;
+    color: var(--text-dim);
+    font: 500 13px/1 -apple-system, system-ui, sans-serif;
+    cursor: pointer;
+  }
+  .seg button.selected { background: var(--panel); color: var(--text); }
+
+  .explain {
+    font: 400 13px/1.55 -apple-system, system-ui, sans-serif;
+    color: var(--text-faint);
+  }
+  .explain p { margin: 0 0 9px; }
+  .explain p:last-child { margin: 0; }
+  .explain strong { color: var(--text-dim); font-weight: 600; }
+
+  .wide-btn {
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    width: 100%;
+    margin-top: 12px;
+    padding: 10px;
+    border: none;
+    border-radius: 10px;
+    background: var(--panel-raised);
+    color: var(--accent);
+    font: 600 14px/1 -apple-system, system-ui, sans-serif;
+    cursor: pointer;
+  }
+  .wide-btn:disabled { color: var(--text-faint); cursor: default; }
+
+  .take {
+    display: flex; align-items: center; gap: 12px;
+    width: 100%;
+    margin-bottom: 8px;
+    padding: 13px;
+    border: none;
+    border-radius: 12px;
+    background: var(--panel);
+    text-align: left;
+    color: inherit;
+    cursor: pointer;
+  }
+  .take .name {
+    font: 600 14.5px/1.2 ui-rounded, -apple-system, system-ui, sans-serif;
+    color: var(--text);
+  }
+  .take .meta {
+    margin-top: 3px;
+    font: 400 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--text-faint);
+  }
+  .take .del {
+    margin-left: auto;
+    border: none; background: none;
+    color: var(--text-faint);
+    font: 400 12px/1 -apple-system, system-ui, sans-serif;
+    cursor: pointer;
+    padding: 6px;
+  }
+  .empty {
+    text-align: center;
+    padding: 40px 30px;
+    color: var(--text-faint);
+    font: 400 13px/1.5 -apple-system, system-ui, sans-serif;
+  }
+  .empty strong {
+    display: block;
+    margin-bottom: 6px;
+    color: var(--text);
+    font: 600 16px/1 ui-rounded, -apple-system, system-ui, sans-serif;
+  }
+</style>
+
+<div id="app">
+  <div id="status">
+    <button class="pill" id="tuning-pill">
+      <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor"><path d="M9 2v8a3 3 0 0 0 2 2.83V22h2v-9.17A3 3 0 0 0 15 10V2h-2v8a1 1 0 0 1-2 0V2z"/></svg>
+      <span id="tuning-label">A = 440 Hz</span>
+    </button>
+    <span id="take-time"><span class="dot"></span><span id="take-elapsed">0:00</span></span>
+    <span id="loaded-name" style="font:400 12px/1 -apple-system,system-ui,sans-serif;color:var(--text-faint)"></span>
+    <span class="spacer"></span>
+    <button class="pill highlight" id="live-btn" style="display:none">Live</button>
+    <button class="pill" id="mic-btn" aria-pressed="false">
+      <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor" aria-hidden="true"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3m5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11z"/></svg>
+      <span id="mic-label">Mic off</span>
+    </button>
+    <button class="pill ghost" id="demo-btn">Demo</button>
+  </div>
+
+  <div id="roll-area">
+    <canvas id="keyboard"></canvas>
+    <canvas id="roll"></canvas>
+    <div id="hint">
+      <button id="start-btn">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3m5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11z"/></svg>
+        <span id="start-label">Start listening</span>
+      </button>
+      <p>Then sing, and the line follows your pitch. Drag the roll to look
+         back, pinch to zoom, and touch the keyboard to hear a reference note
+         at your chosen tuning.</p>
+    </div>
+  </div>
+
+  <div id="readout">
+    <div id="note-block">
+      <span id="note-name">—</span><span id="note-octave"></span>
+    </div>
+    <div class="divider"></div>
+    <div id="cents-block">
+      <span id="cents-text">not listening</span>
+      <div id="cents-bar">
+        <div id="cents-window"></div>
+        <div id="cents-centre"></div>
+        <div id="cents-dot"></div>
+      </div>
+    </div>
+    <div id="freq-block">
+      <span id="freq-measured">— Hz</span>
+      <span id="freq-target">A4 = 440 Hz</span>
+      <div id="level"><div></div></div>
+    </div>
+  </div>
+
+  <div id="transport">
+    <button class="tbtn" id="takes-btn">
+      <svg viewBox="0 0 24 24"><path d="M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8z"/></svg>
+      Takes
+    </button>
+    <button class="tbtn" id="zoom-out-btn">
+      <svg viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14M7 9h5v1H7z"/></svg>
+      Out
+    </button>
+    <button class="tbtn" id="zoom-in-btn">
+      <svg viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14m.5-5H9v2H7v1h2v2h1v-2h2V9h-2z"/></svg>
+      In
+    </button>
+    <span class="spacer"></span>
+    <button id="record-btn" aria-label="Record"><span class="inner"></span></button>
+    <span class="spacer"></span>
+    <button class="tbtn" id="play-btn" disabled>
+      <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+      Play
+    </button>
+    <button class="tbtn" id="export-btn" disabled>
+      <svg viewBox="0 0 24 24"><path d="M18 15v3H6v-3H4v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3zM7 9l1.41 1.41L11 7.83V16h2V7.83l2.59 2.58L17 9l-5-5z"/></svg>
+      Export
+    </button>
+  </div>
+</div>
+
+<div id="scrim"></div>
+<div id="sheet"><div id="sheet-body"></div></div>
+
+<script>
+"use strict";
+
+/* ===========================================================================
+   Nail the Pitch — web build.
+   A direct port of the native app's engine: the same NSDF pitch detector,
+   the same tracker, and the same tuning model, so both versions agree on
+   what note you are singing.
+   =========================================================================== */
+
+/* ---------------------------------------------------------------- Tuning -- */
+
+const SHARP_NAMES = ["C","C♯","D","D♯","E","F","F♯","G","G♯","A","A♯","B"];
+const FLAT_NAMES  = ["C","D♭","D","E♭","E","F","G♭","G","A♭","A","B♭","B"];
+const ACCIDENTALS = new Set([1, 3, 6, 8, 10]);
+
+const tuning = {
+  referenceA4: 440,
+  accidentals: "sharps",
+
+  midiNote(frequency) {
+    if (!(frequency > 0)) return 0;
+    return 69 + 12 * Math.log2(frequency / this.referenceA4);
+  },
+  frequency(note) {
+    return this.referenceA4 * Math.pow(2, (note - 69) / 12);
+  },
+  noteName(note) {
+    const names = this.accidentals === "sharps" ? SHARP_NAMES : FLAT_NAMES;
+    return names[((note % 12) + 12) % 12];
+  },
+  octave(note) {
+    return Math.floor(note / 12) - 1;
+  },
+  noteLabel(note) {
+    return this.noteName(note) + this.octave(note);
+  },
+  analyse(frequency) {
+    if (!(frequency > 0)) return null;
+    const exact = this.midiNote(frequency);
+    const nearest = Math.round(exact);
+    return {
+      frequency,
+      exact,
+      nearest,
+      cents: (exact - nearest) * 100,
+      label: this.noteLabel(nearest)
+    };
+  }
+};
+
+const IN_TUNE_CENTS = 10;
+const isAccidental = (note) => ACCIDENTALS.has(((note % 12) + 12) % 12);
+
+/* ------------------------------------------------------------------- FFT -- */
+
+class FFT {
+  constructor(size) {
+    this.size = size;
+    this.levels = Math.round(Math.log2(size));
+    this.cos = new Float64Array(size / 2);
+    this.sin = new Float64Array(size / 2);
+    for (let i = 0; i < size / 2; i++) {
+      const angle = (2 * Math.PI * i) / size;
+      this.cos[i] = Math.cos(angle);
+      this.sin[i] = Math.sin(angle);
+    }
+    this.reversal = new Int32Array(size);
+    for (let i = 0; i < size; i++) {
+      let value = 0, input = i;
+      for (let bit = 0; bit < this.levels; bit++) {
+        value = (value << 1) | (input & 1);
+        input >>= 1;
+      }
+      this.reversal[i] = value;
+    }
+  }
+
+  transform(real, imag) {
+    const n = this.size;
+    for (let i = 0; i < n; i++) {
+      const j = this.reversal[i];
+      if (j > i) {
+        let t = real[i]; real[i] = real[j]; real[j] = t;
+        t = imag[i]; imag[i] = imag[j]; imag[j] = t;
+      }
+    }
+    for (let block = 2; block <= n; block *= 2) {
+      const half = block / 2, step = n / block;
+      for (let start = 0; start < n; start += block) {
+        let k = 0;
+        for (let i = start; i < start + half; i++) {
+          const j = i + half;
+          const c = this.cos[k], s = this.sin[k];
+          const tr = real[j] * c + imag[j] * s;
+          const ti = imag[j] * c - real[j] * s;
+          real[j] = real[i] - tr;
+          imag[j] = imag[i] - ti;
+          real[i] += tr;
+          imag[i] += ti;
+          k += step;
+        }
+      }
+    }
+  }
+
+  inverse(real, imag) {
+    this.transform(imag, real);
+    const scale = 1 / this.size;
+    for (let i = 0; i < this.size; i++) { real[i] *= scale; imag[i] *= scale; }
+  }
+}
+
+/* -------------------------------------------------------- Pitch detector -- */
+
+const WINDOW_SIZE = 2048;
+
+class PitchDetector {
+  constructor(sampleRate) {
+    this.sampleRate = sampleRate;
+    this.fftSize = WINDOW_SIZE * 2;
+    this.fft = new FFT(this.fftSize);
+    this.real = new Float64Array(this.fftSize);
+    this.imag = new Float64Array(this.fftSize);
+    this.nsdf = new Float64Array(WINDOW_SIZE);
+    this.minFrequency = 62;
+    this.maxFrequency = 2300;
+    this.amplitudeThreshold = 0.0025;
+    this.clarityThreshold = 0.55;
+    this.peakRatio = 0.85;
+  }
+
+  estimate(samples) {
+    const n = WINDOW_SIZE;
+    if (samples.length < n) return { frequency: null, clarity: 0, amplitude: 0 };
+
+    let mean = 0;
+    for (let i = 0; i < n; i++) mean += samples[i];
+    mean /= n;
+
+    let sumSquares = 0;
+    for (let i = 0; i < n; i++) {
+      const value = samples[i] - mean;
+      this.real[i] = value;
+      this.imag[i] = 0;
+      sumSquares += value * value;
+    }
+    this.real.fill(0, n);
+    this.imag.fill(0, n);
+
+    const amplitude = Math.sqrt(sumSquares / n);
+    if (amplitude < this.amplitudeThreshold) {
+      return { frequency: null, clarity: 0, amplitude };
+    }
+
+    this.fft.transform(this.real, this.imag);
+    for (let i = 0; i < this.fftSize; i++) {
+      const power = this.real[i] * this.real[i] + this.imag[i] * this.imag[i];
+      this.real[i] = power;
+      this.imag[i] = 0;
+    }
+    this.fft.inverse(this.real, this.imag);
+
+    const tauMax = Math.min(n - 1, Math.floor(this.sampleRate / this.minFrequency));
+    const tauMin = Math.max(2, Math.floor(this.sampleRate / this.maxFrequency));
+
+    let m = 2 * sumSquares;
+    this.nsdf[0] = 1;
+    for (let tau = 1; tau <= tauMax; tau++) {
+      const dropped = samples[n - tau] - mean;
+      const leading = samples[tau - 1] - mean;
+      m -= dropped * dropped + leading * leading;
+      this.nsdf[tau] = m > 1e-12 ? (2 * this.real[tau]) / m : 0;
+    }
+
+    const peak = this.selectPeak(tauMin, tauMax);
+    if (!peak) return { frequency: null, clarity: 0, amplitude };
+
+    const frequency = this.sampleRate / peak.lag;
+    if (frequency < this.minFrequency || frequency > this.maxFrequency
+        || peak.value < this.clarityThreshold) {
+      return { frequency: null, clarity: Math.max(0, peak.value), amplitude };
+    }
+    return { frequency, clarity: Math.min(1, peak.value), amplitude };
+  }
+
+  // Starts at lag 1, not tauMin: for a high note tauMin already lies past the
+  // fundamental's own peak, and starting there finds its second multiple
+  // instead, reporting the note an octave low.
+  selectPeak(tauMin, tauMax) {
+    if (tauMax <= tauMin + 1 || tauMax <= 2) return null;
+
+    let tau = 1;
+    while (tau < tauMax && this.nsdf[tau] > 0) tau++;
+    while (tau < tauMax && this.nsdf[tau] <= 0) tau++;
+    if (tau >= tauMax) return null;
+
+    const maxima = [];
+    let highest = -Infinity;
+    let index = tau;
+    while (index < tauMax) {
+      if (this.nsdf[index] > this.nsdf[index - 1]
+          && this.nsdf[index] >= this.nsdf[index + 1]) {
+        maxima.push(index);
+        if (this.nsdf[index] > highest) highest = this.nsdf[index];
+        while (index < tauMax && this.nsdf[index] >= this.nsdf[index + 1]) index++;
+      }
+      index++;
+    }
+    if (!maxima.length || highest <= 0) return null;
+
+    const threshold = highest * this.peakRatio;
+    let chosen = maxima.find((t) => this.nsdf[t] >= threshold);
+    if (chosen === undefined) chosen = maxima[0];
+    if (chosen < tauMin) return null;
+
+    return this.interpolate(chosen, tauMax);
+  }
+
+  interpolate(index, tauMax) {
+    if (index <= 0 || index >= tauMax) {
+      return { lag: index, value: this.nsdf[index] };
+    }
+    const left = this.nsdf[index - 1];
+    const centre = this.nsdf[index];
+    const right = this.nsdf[index + 1];
+    const denominator = 2 * centre - left - right;
+    if (Math.abs(denominator) < 1e-12) return { lag: index, value: centre };
+    const shift = (0.5 * (right - left)) / denominator;
+    if (Math.abs(shift) >= 1) return { lag: index, value: centre };
+    return { lag: index + shift, value: centre + 0.25 * (right - left) * shift };
+  }
+}
+
+/* ---------------------------------------------------------------- Tracker -- */
+
+class PitchTracker {
+  constructor() {
+    this.medianWindow = 5;
+    this.onsetFrames = 2;
+    this.releaseFrames = 3;
+    this.anchorHz = 440;
+    this.reset();
+  }
+
+  reset() {
+    this.recent = [];
+    this.voicedRun = 0;
+    this.unvoicedRun = 0;
+    this.lastCents = null;
+  }
+
+  process(estimate, time) {
+    if (estimate.frequency === null) {
+      this.unvoicedRun++;
+      if (this.unvoicedRun >= this.releaseFrames) {
+        this.voicedRun = 0;
+        this.recent = [];
+        this.lastCents = null;
+      }
+      const held = this.unvoicedRun < this.releaseFrames ? this.lastCents : null;
+      return {
+        time,
+        frequency: held === null ? null : this.toHz(held),
+        clarity: estimate.clarity,
+        amplitude: estimate.amplitude
+      };
+    }
+
+    this.unvoicedRun = 0;
+    this.voicedRun++;
+
+    let measured = this.toCents(estimate.frequency);
+    if (this.lastCents !== null) {
+      for (const octave of [-1200, 1200]) {
+        if (Math.abs(measured - this.lastCents - octave) < 40) {
+          measured -= octave;
+          break;
+        }
+      }
+    }
+
+    this.recent.push(measured);
+    if (this.recent.length > this.medianWindow) this.recent.shift();
+
+    const sorted = [...this.recent].sort((a, b) => a - b);
+    const middle = sorted.length >> 1;
+    const smoothed = sorted.length % 2
+      ? sorted[middle]
+      : (sorted[middle - 1] + sorted[middle]) / 2;
+    this.lastCents = smoothed;
+
+    if (this.voicedRun < this.onsetFrames) {
+      return { time, frequency: null, clarity: estimate.clarity,
+               amplitude: estimate.amplitude };
+    }
+    return { time, frequency: this.toHz(smoothed), clarity: estimate.clarity,
+             amplitude: estimate.amplitude };
+  }
+
+  toCents(frequency) { return 1200 * Math.log2(frequency / this.anchorHz); }
+  toHz(cents) { return this.anchorHz * Math.pow(2, cents / 1200); }
+}
+
+/* ------------------------------------------------------------- Segmenter -- */
+
+function segmentNotes(samples, minimumDuration = 0.08, centsTolerance = 50) {
+  const notes = [];
+  let current = null, startTime = 0, lastTime = 0;
+  let centsSum = 0, amplitudeSum = 0, count = 0;
+
+  const flush = () => {
+    if (current !== null && count > 0 && lastTime - startTime >= minimumDuration) {
+      notes.push({
+        midiNote: current,
+        startTime,
+        endTime: lastTime,
+        averageCents: centsSum / count,
+        averageAmplitude: amplitudeSum / count
+      });
+    }
+    current = null; centsSum = 0; amplitudeSum = 0; count = 0;
+  };
+
+  for (const sample of samples) {
+    const reading = sample.frequency === null ? null : tuning.analyse(sample.frequency);
+    if (!reading || Math.abs(reading.cents) > centsTolerance) { flush(); continue; }
+    if (reading.nearest !== current) { flush(); current = reading.nearest; startTime = sample.time; }
+    lastTime = sample.time;
+    centsSum += reading.cents;
+    amplitudeSum += sample.amplitude;
+    count++;
+  }
+  flush();
+  return notes;
+}
+
+/* ------------------------------------------------------------ MIDI export -- */
+
+const TICKS_PER_QUARTER = 480;
+const BPM = 120;
+
+function variableLength(value) {
+  let remaining = Math.max(0, value | 0);
+  const bytes = [remaining & 0x7f];
+  remaining >>= 7;
+  while (remaining > 0) {
+    bytes.unshift((remaining & 0x7f) | 0x80);
+    remaining >>= 7;
+  }
+  return bytes;
+}
+
+function midiTicks(seconds) {
+  return Math.max(0, Math.round(seconds * TICKS_PER_QUARTER * BPM / 60));
+}
+
+// MIDI note numbers carry no absolute frequency, and receivers assume A=440.
+// A melody sung at 432 therefore needs a pitch bend to play back at the pitch
+// it was actually sung at.
+function buildMIDI(notes, reference) {
+  const track = [];
+  const push = (delta, bytes) => { track.push(...variableLength(delta), ...bytes); };
+  const text = (type, string) => {
+    const bytes = Array.from(new TextEncoder().encode(string)).slice(0, 127);
+    push(0, [0xff, type, bytes.length, ...bytes]);
+  };
+
+  text(0x03, "Nail the Pitch");
+  const microseconds = Math.round(60000000 / BPM);
+  push(0, [0xff, 0x51, 0x03,
+           (microseconds >> 16) & 0xff, (microseconds >> 8) & 0xff, microseconds & 0xff]);
+  text(0x01, "Tuning reference A4 = " + reference.toFixed(2) + " Hz");
+
+  const offsetCents = 1200 * Math.log2(reference / 440);
+  if (Math.abs(offsetCents) > 0.01) {
+    push(0, [0xb0, 0x65, 0x00]);
+    push(0, [0xb0, 0x64, 0x00]);
+    push(0, [0xb0, 0x06, 0x02]);
+    push(0, [0xb0, 0x26, 0x00]);
+    push(0, [0xb0, 0x65, 0x7f]);
+    push(0, [0xb0, 0x64, 0x7f]);
+    const value = Math.min(16383, Math.max(0,
+      8192 + Math.round((offsetCents / 200) * 8192)));
+    push(0, [0xe0, value & 0x7f, (value >> 7) & 0x7f]);
+  }
+
+  const events = [];
+  for (const note of notes) {
+    if (note.midiNote < 0 || note.midiNote > 127) continue;
+    const onTick = midiTicks(note.startTime);
+    const offTick = Math.max(onTick + 1, midiTicks(note.endTime));
+    const level = Math.min(1, note.averageAmplitude * 6);
+    const velocity = Math.max(32, Math.min(127, Math.round(40 + level * 87)));
+    events.push({ tick: onTick, on: true, key: note.midiNote, velocity });
+    events.push({ tick: offTick, on: false, key: note.midiNote, velocity: 0 });
+  }
+  events.sort((a, b) => a.tick !== b.tick ? a.tick - b.tick : (a.on ? 1 : 0) - (b.on ? 1 : 0));
+
+  let lastTick = 0;
+  for (const event of events) {
+    push(Math.max(0, event.tick - lastTick),
+         [event.on ? 0x90 : 0x80, event.key, event.velocity]);
+    lastTick = event.tick;
+  }
+  push(0, [0xff, 0x2f, 0x00]);
+
+  const header = [
+    0x4d, 0x54, 0x68, 0x64, 0, 0, 0, 6, 0, 0, 0, 1,
+    (TICKS_PER_QUARTER >> 8) & 0xff, TICKS_PER_QUARTER & 0xff,
+    0x4d, 0x54, 0x72, 0x6b,
+    (track.length >>> 24) & 0xff, (track.length >>> 16) & 0xff,
+    (track.length >>> 8) & 0xff, track.length & 0xff
+  ];
+  return new Uint8Array([...header, ...track]);
+}
+
+/* ----------------------------------------------------------------- Colour -- */
+
+function mix(a, b, amount) {
+  const t = Math.min(1, Math.max(0, amount));
+  return [
+    Math.round(a[0] + (b[0] - a[0]) * t),
+    Math.round(a[1] + (b[1] - a[1]) * t),
+    Math.round(a[2] + (b[2] - a[2]) * t)
+  ];
+}
+const IN_TUNE_RGB = [63, 214, 140];
+const SLIGHT_RGB = [242, 193, 78];
+const OFF_RGB = [242, 101, 92];
+
+function centsRGB(cents) {
+  const magnitude = Math.abs(cents);
+  if (magnitude <= 10) return IN_TUNE_RGB;
+  if (magnitude <= 25) return mix(IN_TUNE_RGB, SLIGHT_RGB, (magnitude - 10) / 15);
+  if (magnitude <= 45) return mix(SLIGHT_RGB, OFF_RGB, (magnitude - 25) / 20);
+  return OFF_RGB;
+}
+const rgbCSS = (rgb, alpha) =>
+  alpha === undefined ? `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`
+                      : `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${alpha})`;
+
+/* ------------------------------------------------------------------ State -- */
+
+const state = {
+  samples: [],
+  notes: [],
+  reading: null,
+  level: 0,
+  monitoring: false,
+  starting: false,
+  recording: false,
+  demo: false,
+  elapsed: 0,
+  lowestNote: 45,
+  highestNote: 81,
+  secondsVisible: 6,
+  followsInput: true,
+  viewportStart: 0,
+  pressedNote: null,
+  // When sound was last loud enough to analyse. Lets the read-out tell the
+  // difference between "the microphone is live but you are not singing" and
+  // "nothing is reaching the microphone at all", which otherwise look
+  // identical and are very different problems.
+  lastSoundAt: null,
+  loadedName: null,
+  takes: []
+};
+
+const NOTE_FLOOR = 33, NOTE_CEILING = 97;
+const MIN_SPAN = 12, MAX_SPAN = 60;
+const CURSOR_RATIO = 0.72;
+const LIVE_HISTORY_SECONDS = 120;
+
+/* ------------------------------------------------------------------ Audio -- */
+
+let audioContext = null;
+let analyser = null;
+let detector = null;
+let tracker = new PitchTracker();
+let micStream = null;
+let timeDomain = null;
+let referenceOsc = null, referenceGain = null;
+let demoOsc = null, demoGain = null;
+let recorder = null, recordedChunks = [], recordedBlobURL = null;
+let playbackAudio = null;
+let startTimestamp = 0;
+
+/* Creating the AudioContext has to happen synchronously inside the tap that
+   started things, or iOS leaves it suspended. */
+function ensureAudioContext() {
+  if (!audioContext) {
+    const Ctor = window.AudioContext || window.webkitAudioContext;
+    if (!Ctor) return null;
+    audioContext = new Ctor();
+  }
+  if (audioContext.state === "suspended") audioContext.resume();
+  return audioContext;
+}
+
+async function startMonitoring() {
+  if (state.monitoring || state.starting) return;
+  state.starting = true;
+  refreshTransport();
+  try {
+    ensureAudioContext();
+    if (!audioContext) {
+      throw new DOMException("This browser has no Web Audio support.",
+                             "NotSupportedError");
+    }
+
+    if (!state.demo) {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new DOMException(
+          "This page is not allowed to reach a microphone here.",
+          "NotSupportedError");
+      }
+      // Asked for with nothing awaited beforehand: Safari only treats the
+      // request as user-initiated while the tap is still on the stack, and an
+      // earlier await is enough to lose that and have the prompt refused.
+      micStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false
+        }
+      });
+      // Resuming again afterwards: on iOS the context can still be suspended
+      // at this point even though it was created inside the tap.
+      if (audioContext.state === "suspended") {
+        try { await audioContext.resume(); } catch (error) { /* reported below */ }
+      }
+    }
+
+    analyser = audioContext.createAnalyser();
+    analyser.fftSize = WINDOW_SIZE;
+    analyser.smoothingTimeConstant = 0;
+    timeDomain = new Float32Array(WINDOW_SIZE);
+
+    if (state.demo) {
+      startDemoSource();
+    } else {
+      audioContext.createMediaStreamSource(micStream).connect(analyser);
+      recorder = null;
+      if (window.MediaRecorder) {
+        try {
+          recorder = new MediaRecorder(micStream);
+          recorder.ondataavailable = (event) => {
+            if (event.data && event.data.size) recordedChunks.push(event.data);
+          };
+          recorder.onstop = () => {
+            if (!recordedChunks.length) return;
+            if (recordedBlobURL) URL.revokeObjectURL(recordedBlobURL);
+            recordedBlobURL = URL.createObjectURL(
+              new Blob(recordedChunks, { type: recordedChunks[0].type }));
+            recordedChunks = [];
+            refreshTransport();
+          };
+        } catch (error) { recorder = null; }
+      }
+    }
+
+    detector = new PitchDetector(audioContext.sampleRate);
+    tracker.reset();
+    state.monitoring = true;
+    state.starting = false;
+    startTimestamp = audioContext.currentTime;
+    refreshTransport();
+  } catch (error) {
+    state.starting = false;
+    if (micStream) { micStream.getTracks().forEach((t) => t.stop()); micStream = null; }
+    refreshTransport();
+    showSheet(errorSheet(error));
+  }
+}
+
+function stopMonitoring() {
+  if (!state.monitoring) return;
+  if (state.recording) finishRecording();
+  if (micStream) { micStream.getTracks().forEach((t) => t.stop()); micStream = null; }
+  stopDemoSource();
+  state.monitoring = false;
+  state.reading = null;
+  state.level = 0;
+  state.lastSoundAt = null;
+  refreshTransport();
+}
+
+/* A synthetic singer, so the display can be seen working before granting
+   microphone access — and so the app is demonstrable on a device with no
+   microphone at all. */
+const DEMO_MELODY = [
+  [60, 0.6], [62, 0.5], [64, 0.7], [65, 0.5],
+  [67, 0.9], [65, 0.4], [64, 0.6], [62, 0.5], [60, 1.1]
+];
+
+function startDemoSource() {
+  demoOsc = audioContext.createOscillator();
+  demoOsc.type = "sawtooth";
+  demoGain = audioContext.createGain();
+  demoGain.gain.value = 0.1;
+  demoOsc.connect(demoGain).connect(analyser);
+
+  const now = audioContext.currentTime;
+  let cursor = now + 0.05;
+  const vibratoDepth = 0.28;     // semitones, peak to peak
+  for (let repeat = 0; repeat < 40; repeat++) {
+    for (const [note, duration] of DEMO_MELODY) {
+      const base = tuning.frequency(note);
+      demoOsc.frequency.setValueAtTime(base, cursor);
+      // Sketch a little vibrato and a slightly late arrival on the pitch, so
+      // the trace looks like singing rather than a square staircase.
+      const steps = 10;
+      for (let step = 1; step <= steps; step++) {
+        const t = cursor + (duration * step) / steps;
+        const wobble = Math.sin(step * 1.9) * vibratoDepth * (step / steps);
+        demoOsc.frequency.linearRampToValueAtTime(
+          base * Math.pow(2, wobble / 12), t);
+      }
+      cursor += duration;
+    }
+  }
+  demoOsc.start(now);
+}
+
+function stopDemoSource() {
+  if (demoOsc) { try { demoOsc.stop(); } catch (e) {} demoOsc.disconnect(); demoOsc = null; }
+  if (demoGain) { demoGain.disconnect(); demoGain = null; }
+}
+
+function playReference(note) {
+  if (!audioContext) {
+    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  audioContext.resume();
+  if (!referenceOsc) {
+    referenceOsc = audioContext.createOscillator();
+    referenceGain = audioContext.createGain();
+    referenceGain.gain.value = 0;
+    referenceOsc.connect(referenceGain).connect(audioContext.destination);
+    referenceOsc.start();
+  }
+  referenceOsc.frequency.setTargetAtTime(
+    tuning.frequency(note), audioContext.currentTime, 0.004);
+  referenceGain.gain.cancelScheduledValues(audioContext.currentTime);
+  referenceGain.gain.setTargetAtTime(0.16, audioContext.currentTime, 0.008);
+}
+
+function stopReference() {
+  if (!referenceGain) return;
+  referenceGain.gain.cancelScheduledValues(audioContext.currentTime);
+  referenceGain.gain.setTargetAtTime(0, audioContext.currentTime, 0.012);
+}
+
+/* -------------------------------------------------------------- Recording -- */
+
+function startRecording() {
+  if (!state.monitoring || state.recording) return;
+  clearTrace();
+  recordedChunks = [];
+  if (recorder && recorder.state === "inactive") { try { recorder.start(); } catch (e) {} }
+  state.recording = true;
+  refreshTransport();
+}
+
+function finishRecording() {
+  if (!state.recording) return;
+  state.recording = false;
+  if (recorder && recorder.state === "recording") { try { recorder.stop(); } catch (e) {} }
+  state.notes = segmentNotes(state.samples);
+  saveTake();
+  refreshTransport();
+}
+
+function clearTrace() {
+  state.samples = [];
+  state.notes = [];
+  state.elapsed = 0;
+  state.viewportStart = 0;
+  state.followsInput = true;
+  state.loadedName = null;
+  tracker.reset();
+  state.lastSoundAt = null;
+  startTimestamp = audioContext ? audioContext.currentTime : 0;
+  refreshTransport();
+}
+
+/* Takes live in localStorage. The trace is stored as frequencies and the
+   tuning alongside it, so reopening a take under a different reference
+   re-reads the same performance. */
+const STORAGE_KEY = "nailthepitch.takes";
+
+function loadTakes() {
+  try {
+    state.takes = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
+  } catch (error) { state.takes = []; }
+}
+
+function persistTakes() {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state.takes.slice(0, 40)));
+  } catch (error) { /* quota or private mode; takes are a convenience here */ }
+}
+
+function saveTake() {
+  if (!state.samples.length) return;
+  const now = new Date();
+  const name = "Take " + now.toLocaleString([], {
+    month: "short", day: "numeric", hour: "2-digit", minute: "2-digit"
+  });
+  // Thin the trace before storing; 60 points a second is plenty to redraw.
+  const stored = state.samples.map((s) => [
+    Math.round(s.time * 1000) / 1000,
+    s.frequency === null ? null : Math.round(s.frequency * 100) / 100,
+    Math.round(s.amplitude * 1000) / 1000
+  ]);
+  state.takes.unshift({
+    id: String(Date.now()),
+    name,
+    reference: tuning.referenceA4,
+    duration: state.samples.length ? state.samples[state.samples.length - 1].time : 0,
+    trace: stored
+  });
+  state.loadedName = name;
+  persistTakes();
+}
+
+function loadTake(take) {
+  stopMonitoring();
+  state.samples = take.trace.map(([time, frequency, amplitude]) => ({
+    time, frequency, amplitude, clarity: 1
+  }));
+  state.loadedName = take.name;
+  state.elapsed = take.duration;
+  state.followsInput = false;
+  state.viewportStart = 0;
+  state.notes = segmentNotes(state.samples);
+  fitViewportToTrace();
+  refreshTransport();
+}
+
+function deleteTake(id) {
+  state.takes = state.takes.filter((t) => t.id !== id);
+  persistTakes();
+}
+
+/* --------------------------------------------------------------- Viewport -- */
+
+function fitViewportToTrace() {
+  const voiced = state.samples.filter((s) => s.frequency !== null);
+  if (!voiced.length) return;
+  const notes = voiced.map((s) => tuning.midiNote(s.frequency));
+  let low = Math.min(...notes) - 3;
+  let high = Math.max(...notes) + 3;
+  if (high - low < MIN_SPAN) {
+    const centre = (low + high) / 2;
+    low = centre - MIN_SPAN / 2;
+    high = centre + MIN_SPAN / 2;
+  }
+  state.lowestNote = Math.max(NOTE_FLOOR, low);
+  state.highestNote = Math.min(NOTE_CEILING, high);
+}
+
+function panNotes(semitones) {
+  const span = state.highestNote - state.lowestNote;
+  const low = Math.max(NOTE_FLOOR, Math.min(NOTE_CEILING - span, state.lowestNote + semitones));
+  state.lowestNote = low;
+  state.highestNote = low + span;
+}
+
+function zoomNotes(factor) {
+  const span = state.highestNote - state.lowestNote;
+  const centre = (state.lowestNote + state.highestNote) / 2;
+  const newSpan = Math.min(MAX_SPAN, Math.max(MIN_SPAN, span / factor));
+  let low = centre - newSpan / 2;
+  low = Math.max(NOTE_FLOOR, Math.min(NOTE_CEILING - newSpan, low));
+  state.lowestNote = low;
+  state.highestNote = low + newSpan;
+}
+
+/* ----------------------------------------------------------------- Canvas -- */
+
+const rollCanvas = document.getElementById("roll");
+const keyboardCanvas = document.getElementById("keyboard");
+const rollContext = rollCanvas.getContext("2d");
+const keyboardContext = keyboardCanvas.getContext("2d");
+let dpr = 1;
+
+function resizeCanvases() {
+  dpr = Math.min(3, window.devicePixelRatio || 1);
+  for (const canvas of [rollCanvas, keyboardCanvas]) {
+    const rect = canvas.getBoundingClientRect();
+    canvas.width = Math.max(1, Math.round(rect.width * dpr));
+    canvas.height = Math.max(1, Math.round(rect.height * dpr));
+  }
+}
+
+function geometry(canvas) {
+  const width = canvas.width / dpr;
+  const height = canvas.height / dpr;
+  const span = Math.max(0.001, state.highestNote - state.lowestNote);
+  const timeAtLeft = state.followsInput
+    ? state.elapsed + state.secondsVisible * (1 - CURSOR_RATIO) - state.secondsVisible
+    : state.viewportStart;
+  return {
+    width, height, span, timeAtLeft,
+    y: (note) => ((state.highestNote - note) / span) * height,
+    note: (y) => state.highestNote - (y / Math.max(1, height)) * span,
+    laneHeight: height / span,
+    x: (time) => ((time - timeAtLeft) / state.secondsVisible) * width,
+    time: (x) => timeAtLeft + (x / Math.max(1, width)) * state.secondsVisible
+  };
+}
+
+const css = (name) => getComputedStyle(document.documentElement)
+  .getPropertyValue(name).trim();
+
+function drawRoll() {
+  const g = geometry(rollCanvas);
+  const ctx = rollContext;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, g.width, g.height);
+
+  const lowest = Math.floor(state.lowestNote);
+  const highest = Math.ceil(state.highestNote);
+  const laneNatural = css("--lane-natural");
+  const laneAccidental = css("--lane-accidental");
+  const gridColour = css("--grid");
+  const showDetail = g.laneHeight >= 6;
+
+  for (let note = lowest; note <= highest; note++) {
+    const top = g.y(note + 0.5);
+    if (top + g.laneHeight < 0 || top > g.height) continue;
+    ctx.fillStyle = isAccidental(note) ? laneAccidental : laneNatural;
+    ctx.fillRect(0, top, g.width, g.laneHeight);
+    if (showDetail) {
+      const isOctave = ((note % 12) + 12) % 12 === 0;
+      ctx.strokeStyle = isOctave ? "#3d4757" : gridColour;
+      ctx.lineWidth = isOctave ? 1 : 0.5;
+      ctx.beginPath();
+      ctx.moveTo(0, Math.round(top) + 0.5);
+      ctx.lineTo(g.width, Math.round(top) + 0.5);
+      ctx.stroke();
+    }
+  }
+
+  // Time grid, spaced to about one line every 80 points.
+  const candidates = [0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60];
+  const spacing = candidates.find(
+    (s) => g.width * (s / state.secondsVisible) >= 80) || 60;
+  ctx.strokeStyle = "rgba(38,44,54,0.5)";
+  ctx.lineWidth = 0.5;
+  let time = Math.max(0, Math.ceil(g.timeAtLeft / spacing) * spacing);
+  while (g.x(time) <= g.width) {
+    const x = g.x(time);
+    if (x >= 0) {
+      ctx.beginPath();
+      ctx.moveTo(Math.round(x) + 0.5, 0);
+      ctx.lineTo(Math.round(x) + 0.5, g.height);
+      ctx.stroke();
+    }
+    time += spacing;
+  }
+
+  drawTrace(ctx, g);
+
+  // Cursor.
+  const cursorTime = state.followsInput ? state.elapsed : state.viewportStart
+    + state.secondsVisible * CURSOR_RATIO;
+  const cursorX = g.x(cursorTime);
+  if (cursorX >= -1 && cursorX <= g.width + 1) {
+    ctx.strokeStyle = state.recording ? "rgba(242,85,83,0.9)" : "rgba(90,99,114,0.55)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(Math.round(cursorX) + 0.5, 0);
+    ctx.lineTo(Math.round(cursorX) + 0.5, g.height);
+    ctx.stroke();
+  }
+}
+
+const BUCKET_COUNT = 12;
+
+function lowerBound(samples, time) {
+  let low = 0, high = samples.length;
+  while (low < high) {
+    const middle = (low + high) >> 1;
+    if (samples[middle].time < time) low = middle + 1; else high = middle;
+  }
+  return low;
+}
+
+function drawTrace(ctx, g) {
+  const samples = state.samples;
+  if (samples.length < 2) return;
+
+  const endTime = g.timeAtLeft + state.secondsVisible;
+  const start = Math.max(0, lowerBound(samples, g.timeAtLeft) - 1);
+  const end = Math.min(samples.length, lowerBound(samples, endTime) + 1);
+  if (end - start < 2) return;
+
+  // Batch the polyline into colour buckets: a handful of strokes instead of
+  // one per sample.
+  const buckets = Array.from({ length: BUCKET_COUNT }, () => []);
+  let previous = null;
+  let lastCents = 0;
+
+  for (let index = start; index < end; index++) {
+    const sample = samples[index];
+    if (sample.frequency === null) { previous = null; continue; }
+    const note = tuning.midiNote(sample.frequency);
+    const point = { x: g.x(sample.time), y: g.y(note) };
+    const cents = (note - Math.round(note)) * 100;
+    lastCents = cents;
+    if (previous && Math.abs(point.y - previous.y) < g.height * 0.6) {
+      const magnitude = Math.min(50, Math.abs(cents));
+      const bucket = Math.min(BUCKET_COUNT - 1,
+        Math.max(0, Math.floor((magnitude / 50) * (BUCKET_COUNT - 1))));
+      buckets[bucket].push(previous, point);
+    }
+    previous = point;
+  }
+
+  const bucketColour = (index) =>
+    centsRGB((index / (BUCKET_COUNT - 1)) * 50);
+
+  for (const pass of [{ width: 7, alpha: 0.22 }, { width: 2.6, alpha: 1 }]) {
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.lineWidth = pass.width;
+    for (let index = 0; index < BUCKET_COUNT; index++) {
+      const points = buckets[index];
+      if (!points.length) continue;
+      ctx.strokeStyle = rgbCSS(bucketColour(index), pass.alpha);
+      ctx.beginPath();
+      for (let i = 0; i < points.length; i += 2) {
+        ctx.moveTo(points[i].x, points[i].y);
+        ctx.lineTo(points[i + 1].x, points[i + 1].y);
+      }
+      ctx.stroke();
+    }
+  }
+
+  // Live head.
+  if (state.followsInput) {
+    for (let index = samples.length - 1; index >= 0; index--) {
+      const sample = samples[index];
+      if (sample.frequency === null) continue;
+      if (sample.time < endTime - 0.4) break;
+      const point = { x: g.x(sample.time), y: g.y(tuning.midiNote(sample.frequency)) };
+      const colour = centsRGB(lastCents);
+      ctx.fillStyle = rgbCSS(colour, 0.3);
+      ctx.beginPath(); ctx.arc(point.x, point.y, 6, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = rgbCSS(colour);
+      ctx.beginPath(); ctx.arc(point.x, point.y, 3.5, 0, Math.PI * 2); ctx.fill();
+      break;
+    }
+  }
+}
+
+function drawKeyboard() {
+  const g = geometry(keyboardCanvas);
+  const ctx = keyboardContext;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = css("--panel");
+  ctx.fillRect(0, 0, g.width, g.height);
+
+  const lowest = Math.floor(state.lowestNote);
+  const highest = Math.ceil(state.highestNote);
+  const sung = state.reading ? state.reading.nearest : null;
+  const gap = g.laneHeight > 9 ? 1 : 0;
+
+  ctx.textBaseline = "middle";
+  ctx.textAlign = "right";
+
+  for (let note = lowest; note <= highest; note++) {
+    const top = g.y(note + 0.5);
+    if (top + g.laneHeight < 0 || top > g.height) continue;
+
+    const accidental = isAccidental(note);
+    const inset = accidental ? g.width * 0.34 : 0;
+    const width = g.width - inset;
+    const height = Math.max(1, g.laneHeight - gap);
+    const y = top + gap / 2;
+
+    let fill;
+    if (note === state.pressedNote) fill = css("--accent");
+    else if (note === sung) fill = rgbCSS(centsRGB(state.reading.cents), 0.85);
+    else if (accidental) fill = "#222730";
+    else fill = "#d4dae2";
+
+    const radius = Math.min(3, g.laneHeight / 3);
+    ctx.fillStyle = fill;
+    ctx.beginPath();
+    if (ctx.roundRect) ctx.roundRect(0, y, width, height, radius);
+    else ctx.rect(0, y, width, height);
+    ctx.fill();
+
+    const isC = ((note % 12) + 12) % 12 === 0;
+    const wantsLabel = g.laneHeight >= 15 ? !accidental : isC;
+    if (!wantsLabel || g.laneHeight < 9) continue;
+
+    const highlighted = note === state.pressedNote || note === sung;
+    ctx.fillStyle = highlighted ? "#ffffff" : "#3f4550";
+    const size = Math.min(12, g.laneHeight * 0.62);
+    ctx.font = `${isC ? 600 : 400} ${size}px ui-rounded, -apple-system, system-ui, sans-serif`;
+    ctx.fillText(tuning.noteLabel(note), width - 6, y + height / 2);
+  }
+}
+
+/* ------------------------------------------------------------------- Loop -- */
+
+function analysisFrame() {
+  if (!state.monitoring || !analyser) return;
+  analyser.getFloatTimeDomainData(timeDomain);
+  const estimate = detector.estimate(timeDomain);
+  const time = audioContext.currentTime - startTimestamp;
+  const sample = tracker.process(estimate, time);
+
+  state.samples.push(sample);
+  state.elapsed = time;
+
+  if (!state.recording) {
+    const cutoff = state.elapsed - LIVE_HISTORY_SECONDS;
+    if (cutoff > 0) {
+      const index = lowerBound(state.samples, cutoff);
+      if (index > 0) state.samples.splice(0, index);
+    }
+  }
+
+  const scaled = Math.min(1, estimate.amplitude * 8);
+  state.level = scaled > state.level ? scaled : state.level * 0.82 + scaled * 0.18;
+  if (estimate.amplitude >= detector.amplitudeThreshold) state.lastSoundAt = time;
+
+  state.reading = sample.frequency === null ? null : tuning.analyse(sample.frequency);
+  if (state.recording) state.notes = segmentNotes(state.samples);
+}
+
+let lastReadoutUpdate = 0;
+
+function frame(timestamp) {
+  analysisFrame();
+  drawRoll();
+  drawKeyboard();
+  // The read-out text does not need 60 updates a second, and throttling it
+  // keeps the numbers readable rather than a blur.
+  if (timestamp - lastReadoutUpdate > 70) {
+    updateReadout();
+    lastReadoutUpdate = timestamp;
+  }
+  requestAnimationFrame(frame);
+}
+
+/* --------------------------------------------------------------- Read-out -- */
+
+const el = (id) => document.getElementById(id);
+
+function updateReadout() {
+  const reading = state.reading;
+  const noteName = el("note-name");
+  const noteOctave = el("note-octave");
+  const centsText = el("cents-text");
+  const dot = el("cents-dot");
+
+  if (reading) {
+    noteName.textContent = tuning.noteName(reading.nearest);
+    noteName.classList.add("active");
+    noteOctave.textContent = tuning.octave(reading.nearest);
+    const value = Math.round(reading.cents);
+    centsText.textContent = Math.abs(reading.cents) <= IN_TUNE_CENTS
+      ? "in tune"
+      : (value > 0 ? `+${value} cents sharp` : `${value} cents flat`);
+    const rgb = centsRGB(reading.cents);
+    centsText.style.color = rgbCSS(rgb);
+    dot.style.background = rgbCSS(rgb);
+    dot.style.left = `${50 + Math.max(-50, Math.min(50, reading.cents)) / 50 * 50}%`;
+    dot.classList.add("visible");
+    el("freq-measured").textContent = reading.frequency.toFixed(1) + " Hz";
+    el("freq-target").textContent =
+      "target " + tuning.frequency(reading.nearest).toFixed(1) + " Hz";
+  } else {
+    noteName.textContent = "—";
+    noteName.classList.remove("active");
+    noteOctave.textContent = "";
+    centsText.textContent = state.monitoring ? listeningText() : "not listening";
+    centsText.style.color = state.monitoring && isSilent()
+      ? css("--slightly-off") : css("--text-faint");
+    dot.classList.remove("visible");
+    el("freq-measured").textContent = "— Hz";
+    el("freq-target").textContent =
+      `A4 = ${formatHz(tuning.referenceA4)} Hz`;
+  }
+
+  el("level").firstElementChild.style.width = `${Math.round(state.level * 100)}%`;
+  el("level").firstElementChild.style.background =
+    state.level > 0.92 ? css("--off") : css("--accent");
+
+  if (state.recording) {
+    const total = Math.floor(state.elapsed);
+    el("take-elapsed").textContent =
+      `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+  }
+}
+
+/* True when nothing loud enough to analyse has arrived for a while. */
+function isSilent() {
+  if (state.lastSoundAt === null) return state.elapsed > 1.2;
+  return state.elapsed - state.lastSoundAt > 1.5;
+}
+
+function listeningText() {
+  if (!isSilent()) return "listening…";
+  return state.demo ? "demo is silent" : "no sound reaching the mic";
+}
+
+function formatHz(value) {
+  return value === Math.round(value) ? String(Math.round(value)) : value.toFixed(1);
+}
+
+function refreshTuningLabel() {
+  el("tuning-label").textContent = `A = ${formatHz(tuning.referenceA4)} Hz`;
+  el("tuning-pill").classList.toggle("highlight",
+    Math.abs(tuning.referenceA4 - 440) > 0.01);
+}
+
+function refreshTransport() {
+  el("record-btn").classList.toggle("recording", state.recording);
+  el("record-btn").disabled = !state.monitoring;
+  el("take-time").classList.toggle("visible", state.recording);
+  el("loaded-name").textContent =
+    !state.recording && state.loadedName ? state.loadedName : "";
+  el("live-btn").style.display = state.followsInput ? "none" : "inline-flex";
+  el("play-btn").disabled = !recordedBlobURL;
+  el("export-btn").disabled = state.notes.length === 0;
+  el("demo-btn").classList.toggle("highlight", state.demo);
+  el("demo-btn").textContent = state.demo ? "Demo on" : "Demo";
+
+  const listening = state.monitoring && !state.demo;
+  const micBtn = el("mic-btn");
+  micBtn.classList.toggle("listening", listening);
+  micBtn.classList.toggle("busy", state.starting);
+  micBtn.setAttribute("aria-pressed", listening ? "true" : "false");
+  el("mic-label").textContent = state.starting
+    ? "Starting…" : (listening ? "Listening" : "Mic off");
+
+  const startBtn = el("start-btn");
+  startBtn.disabled = state.starting;
+  el("start-label").textContent = state.starting
+    ? "Asking for the microphone…" : "Start listening";
+
+  // The hint is the empty state: show it whenever nothing is coming in.
+  el("hint").classList.toggle("hidden", state.monitoring);
+}
+
+/* --------------------------------------------------------------- Gestures -- */
+
+let gesture = null;
+
+function pointerNote(event, canvas) {
+  const rect = canvas.getBoundingClientRect();
+  const g = geometry(canvas);
+  return Math.round(g.note(event.clientY - rect.top));
+}
+
+keyboardCanvas.addEventListener("pointerdown", (event) => {
+  keyboardCanvas.setPointerCapture(event.pointerId);
+  state.pressedNote = pointerNote(event, keyboardCanvas);
+  playReference(state.pressedNote);
+});
+keyboardCanvas.addEventListener("pointermove", (event) => {
+  if (state.pressedNote === null) return;
+  const note = pointerNote(event, keyboardCanvas);
+  if (note === state.pressedNote) return;
+  state.pressedNote = note;
+  playReference(note);
+});
+for (const type of ["pointerup", "pointercancel", "pointerleave"]) {
+  keyboardCanvas.addEventListener(type, () => {
+    if (state.pressedNote === null) return;
+    state.pressedNote = null;
+    stopReference();
+  });
+}
+
+rollCanvas.addEventListener("pointerdown", (event) => {
+  rollCanvas.setPointerCapture(event.pointerId);
+  const g = geometry(rollCanvas);
+  gesture = {
+    startY: event.clientY,
+    startX: event.clientX,
+    startLowest: state.lowestNote,
+    startViewport: state.followsInput
+      ? Math.max(0, state.elapsed - state.secondsVisible * CURSOR_RATIO)
+      : state.viewportStart,
+    laneHeight: g.laneHeight,
+    width: g.width,
+    moved: false
+  };
+});
+rollCanvas.addEventListener("pointermove", (event) => {
+  if (!gesture) return;
+  const dy = event.clientY - gesture.startY;
+  const dx = event.clientX - gesture.startX;
+  if (Math.abs(dy) > 4 || Math.abs(dx) > 4) gesture.moved = true;
+
+  const span = state.highestNote - state.lowestNote;
+  const semitones = -dy / Math.max(1, gesture.laneHeight);
+  const low = Math.max(NOTE_FLOOR,
+    Math.min(NOTE_CEILING - span, gesture.startLowest + semitones));
+  state.lowestNote = low;
+  state.highestNote = low + span;
+
+  if (Math.abs(dx) > 10) {
+    state.followsInput = false;
+    const seconds = (-dx / Math.max(1, gesture.width)) * state.secondsVisible;
+    state.viewportStart = Math.max(0, gesture.startViewport + seconds);
+    refreshTransport();
+  }
+});
+for (const type of ["pointerup", "pointercancel"]) {
+  rollCanvas.addEventListener(type, () => { gesture = null; });
+}
+rollCanvas.addEventListener("dblclick", () => {
+  fitViewportToTrace();
+});
+rollCanvas.addEventListener("wheel", (event) => {
+  event.preventDefault();
+  zoomNotes(event.deltaY < 0 ? 1.12 : 1 / 1.12);
+}, { passive: false });
+
+// Two-finger pinch to zoom the pitch range.
+let pinchStart = null;
+rollCanvas.addEventListener("touchstart", (event) => {
+  if (event.touches.length === 2) {
+    pinchStart = {
+      distance: touchDistance(event.touches),
+      span: state.highestNote - state.lowestNote
+    };
+  }
+}, { passive: true });
+rollCanvas.addEventListener("touchmove", (event) => {
+  if (event.touches.length === 2 && pinchStart) {
+    event.preventDefault();
+    const scale = touchDistance(event.touches) / Math.max(1, pinchStart.distance);
+    const centre = (state.lowestNote + state.highestNote) / 2;
+    const newSpan = Math.min(MAX_SPAN, Math.max(MIN_SPAN, pinchStart.span / scale));
+    let low = centre - newSpan / 2;
+    low = Math.max(NOTE_FLOOR, Math.min(NOTE_CEILING - newSpan, low));
+    state.lowestNote = low;
+    state.highestNote = low + newSpan;
+  }
+}, { passive: false });
+rollCanvas.addEventListener("touchend", () => { pinchStart = null; }, { passive: true });
+
+function touchDistance(touches) {
+  const dx = touches[0].clientX - touches[1].clientX;
+  const dy = touches[0].clientY - touches[1].clientY;
+  return Math.hypot(dx, dy);
+}
+
+/* ----------------------------------------------------------------- Sheets -- */
+
+function showSheet(html) {
+  el("sheet-body").innerHTML = html;
+  el("sheet").classList.add("open");
+  el("scrim").classList.add("open");
+}
+function hideSheet() {
+  el("sheet").classList.remove("open");
+  el("scrim").classList.remove("open");
+}
+el("scrim").addEventListener("click", hideSheet);
+
+/* Say what actually went wrong and what to do about it. A page embedded in
+   another site can be refused the microphone by the embedding page rather
+   than by the viewer, and nothing inside the page can grant it — so offer the
+   way out instead of repeating "permission denied". */
+const isEmbedded = (() => {
+  try { return window.self !== window.top; } catch (error) { return true; }
+})();
+
+function describeMicError(error) {
+  const name = (error && error.name) || "";
+  const message = (error && error.message) || String(error);
+
+  if (name === "NotAllowedError" || name === "PermissionDeniedError"
+      || name === "SecurityError") {
+    return {
+      title: "Microphone access was blocked",
+      body: isEmbedded
+        ? `This page is running inside another page, which decides whether
+           the microphone may be used — so allowing it here is not something
+           this page can do. Open it in its own tab and the choice becomes
+           yours.`
+        : `Safari is holding the microphone back for this page. On iPhone:
+           tap <strong>aA</strong> at the left of the address bar →
+           <strong>Website Settings</strong> → <strong>Microphone</strong> →
+           <strong>Allow</strong>, then reload. On a Mac: Safari →
+           Settings for This Website → Microphone.`
+    };
+  }
+  if (name === "NotFoundError" || name === "DevicesNotFoundError") {
+    return { title: "No microphone found",
+             body: "This device is not offering an audio input." };
+  }
+  if (name === "NotReadableError" || name === "TrackStartError") {
+    return { title: "The microphone is busy",
+             body: `Another app or tab has the microphone. Close it and try
+                    again.` };
+  }
+  if (name === "NotSupportedError") {
+    return {
+      title: "Microphone unavailable here",
+      body: isEmbedded
+        ? `This page is embedded in another page that has not granted
+           microphone access. Open it in its own tab to use it.`
+        : `A microphone needs a secure page. Open this over https, or on
+           localhost.`
+    };
+  }
+  return { title: "Could not start listening", body: message };
+}
+
+function errorSheet(error) {
+  const { title, body } = describeMicError(error);
+  const openInTab = isEmbedded
+    ? `<a class="wide-btn" href="${location.href}" target="_blank"
+          rel="noopener" style="text-decoration:none">Open in its own tab</a>`
+    : "";
+  return `
+    <header><h1>${title}</h1>
+      <button onclick="window.__ntp.hideSheet()">Done</button></header>
+    <div class="card">
+      <p class="explain">${body}</p>
+      ${openInTab}
+    </div>
+    <div class="card">
+      <h3>In the meantime</h3>
+      <p class="explain">Switch on <strong>Demo</strong> in the top right to
+      watch the display work against a synthetic singer — useful for checking
+      the tuning settings without a microphone.</p>
+    </div>`;
+}
+
+const PRESETS = [
+  { id: "a440", value: 440, title: "A = 440 Hz", subtitle: "Standard concert pitch" },
+  { id: "a432", value: 432, title: "A = 432 Hz", subtitle: "Lowers everything by about 32 cents" },
+  { id: "custom", value: null, title: "Custom", subtitle: "Set your own reference" }
+];
+let selectedPreset = "a440";
+let customValue = 432;
+
+function tuningSheet() {
+  const offset = 1200 * Math.log2(tuning.referenceA4 / 440);
+  const offsetText = Math.abs(offset) < 0.01 ? "standard" : `${offset >= 0 ? "+" : ""}${offset.toFixed(2)} cents`;
+
+  const presets = PRESETS.map((preset) => `
+    <button class="preset ${selectedPreset === preset.id ? "selected" : ""}"
+            onclick="window.__ntp.choosePreset('${preset.id}')">
+      <span class="radio"></span>
+      <span>
+        <span class="title">${preset.id === "custom"
+          ? `Custom — ${formatHz(customValue)} Hz` : preset.title}</span>
+        <span class="subtitle">${preset.subtitle}</span>
+      </span>
+    </button>`).join("");
+
+  const customCard = selectedPreset !== "custom" ? "" : `
+    <div class="card">
+      <div class="row">
+        <span style="font:500 13px -apple-system,system-ui">Reference A4</span>
+        <span class="compare" style="color:var(--text);font-size:14px;font-weight:600">
+          ${formatHz(customValue)} Hz</span>
+      </div>
+      <input type="range" min="380" max="500" step="0.5" value="${customValue}"
+             oninput="window.__ntp.setCustom(this.value)">
+      <div class="chips">
+        ${[415, 430, 432, 440, 442, 444].map((value) => `
+          <button class="chip ${Math.abs(customValue - value) < 0.01 ? "selected" : ""}"
+                  onclick="window.__ntp.setCustom(${value}, true)">${value}</button>`).join("")}
+      </div>
+    </div>`;
+
+  const landmarks = [69, 60, 48].map((note) => `
+    <div class="row">
+      <span class="label">${tuning.noteLabel(note)}</span>
+      <span class="value">${tuning.frequency(note).toFixed(2)} Hz</span>
+      <span class="compare">${(440 * Math.pow(2, (note - 69) / 12)).toFixed(2)} Hz at A=440</span>
+    </div>`).join("");
+
+  return `
+    <header><h1>Tuning</h1>
+      <button onclick="window.__ntp.hideSheet()">Done</button></header>
+    <div class="card" style="background:none;padding:0;margin:14px 16px">${presets}</div>
+    ${customCard}
+    <div class="card">
+      <h3>At this reference</h3>
+      ${landmarks}
+      <div class="row" style="border-top:1px solid var(--grid);margin-top:8px;padding-top:9px">
+        <span>Offset from standard pitch</span>
+        <span class="compare" style="font-size:13px;font-weight:600;color:${
+          Math.abs(offset) < 0.01 ? "var(--text-faint)" : "var(--accent)"}">${offsetText}</span>
+      </div>
+      <button class="wide-btn" onclick="window.__ntp.hearA()">
+        Hear concert A
+      </button>
+    </div>
+    <div class="card">
+      <h3>Note names</h3>
+      <div class="seg">
+        <button class="${tuning.accidentals === "sharps" ? "selected" : ""}"
+                onclick="window.__ntp.setAccidentals('sharps')">Sharps (C♯)</button>
+        <button class="${tuning.accidentals === "flats" ? "selected" : ""}"
+                onclick="window.__ntp.setAccidentals('flats')">Flats (D♭)</button>
+      </div>
+    </div>
+    <div class="card">
+      <h3>About A = 432 Hz</h3>
+      <div class="explain">
+        <p>Lowering the reference from 440 to 432 Hz shifts every note down by
+        about <strong>32 cents</strong> — roughly a third of a semitone. Middle C
+        becomes <strong>256.87 Hz</strong> instead of 261.63 Hz.</p>
+        <p>Changing the reference re-reads your takes rather than re-recording
+        them: the trace is stored as frequencies, so switching references moves
+        the target lines and leaves your performance where it was. A take sung
+        against 440 will show as consistently sharp once you switch to 432,
+        which is exactly what it was.</p>
+      </div>
+    </div>`;
+}
+
+function takesSheet() {
+  const body = !state.takes.length
+    ? `<div class="empty"><strong>No takes yet</strong>
+         Press record and sing. Takes are saved in this browser along with the
+         tuning they were recorded at.</div>`
+    : `<div style="padding:14px 16px">${state.takes.map((take) => `
+        <div class="take">
+          <span onclick="window.__ntp.openTake('${take.id}')" style="flex:1;cursor:pointer">
+            <span class="name">${take.name}</span>
+            <span class="meta">${formatDuration(take.duration)} · A = ${formatHz(take.reference)} Hz</span>
+          </span>
+          <button class="del" onclick="window.__ntp.removeTake('${take.id}')">Delete</button>
+        </div>`).join("")}</div>`;
+
+  return `
+    <header><h1>Takes</h1>
+      <button onclick="window.__ntp.hideSheet()">Done</button></header>
+    ${body}`;
+}
+
+function formatDuration(seconds) {
+  const total = Math.round(seconds || 0);
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+}
+
+/* --------------------------------------------------------- Wiring it up -- */
+
+window.__ntp = {
+  hideSheet,
+  choosePreset(id) {
+    selectedPreset = id;
+    const preset = PRESETS.find((p) => p.id === id);
+    tuning.referenceA4 = preset.value === null ? customValue : preset.value;
+    afterTuningChange();
+    showSheet(tuningSheet());
+  },
+  setCustom(value, rerender) {
+    customValue = Number(value);
+    selectedPreset = "custom";
+    tuning.referenceA4 = customValue;
+    afterTuningChange();
+    if (rerender) showSheet(tuningSheet());
+    else {
+      const label = document.querySelector(".preset.selected .title");
+      if (label) label.textContent = `Custom — ${formatHz(customValue)} Hz`;
+    }
+  },
+  setAccidentals(style) {
+    tuning.accidentals = style;
+    persistTuning();
+    showSheet(tuningSheet());
+  },
+  hearA() {
+    playReference(69);
+    setTimeout(stopReference, 1600);
+  },
+  async exportMIDI() {
+    const data = buildMIDI(state.notes, tuning.referenceA4);
+    const name = (state.loadedName || "Nail the Pitch") + ".mid";
+    const result = await offerFile(name, data, "audio/midi");
+    if (!result.ok) {
+      showSheet(exportSheet(result.reason === "format"
+        ? "MIDI files cannot be saved from this view. Open the page in its own "
+          + "browser tab to export MIDI, or use the note list below, which "
+          + "always works."
+        : "That export could not be saved. Try again, or use the note list."));
+    } else {
+      hideSheet();
+    }
+  },
+  async exportCSV() {
+    const text = buildNoteCSV(state.notes, tuning.referenceA4);
+    const name = (state.loadedName || "Nail the Pitch") + ".csv";
+    const result = await offerFile(name, text, "text/csv");
+    if (result.ok) hideSheet();
+    else showSheet(exportSheet("That export could not be saved."));
+  },
+  openTake(id) {
+    const take = state.takes.find((t) => t.id === id);
+    if (take) { loadTake(take); hideSheet(); }
+  },
+  removeTake(id) {
+    deleteTake(id);
+    showSheet(takesSheet());
+  }
+};
+
+function afterTuningChange() {
+  // Re-read the existing trace against the new reference.
+  state.notes = segmentNotes(state.samples);
+  // The last reading was analysed against the old reference. Re-analyse the
+  // same frequency rather than waiting for the next audio frame to correct
+  // it — when a saved take is being reviewed there is no next frame, and the
+  // read-out would otherwise show the new target beside the old cents figure.
+  if (state.reading) state.reading = tuning.analyse(state.reading.frequency);
+  refreshTuningLabel();
+  updateReadout();
+  persistTuning();
+}
+
+const TUNING_KEY = "nailthepitch.tuning";
+
+function persistTuning() {
+  try {
+    localStorage.setItem(TUNING_KEY, JSON.stringify({
+      reference: tuning.referenceA4,
+      preset: selectedPreset,
+      custom: customValue,
+      accidentals: tuning.accidentals
+    }));
+  } catch (error) { /* private mode */ }
+}
+
+function restoreTuning() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(TUNING_KEY) || "null");
+    if (!stored) return;
+    if (stored.reference >= 380 && stored.reference <= 500) {
+      tuning.referenceA4 = stored.reference;
+    }
+    if (stored.preset) selectedPreset = stored.preset;
+    if (stored.custom) customValue = stored.custom;
+    if (stored.accidentals) tuning.accidentals = stored.accidentals;
+  } catch (error) { /* ignore */ }
+}
+
+el("tuning-pill").addEventListener("click", () => showSheet(tuningSheet()));
+el("takes-btn").addEventListener("click", () => showSheet(takesSheet()));
+el("live-btn").addEventListener("click", () => {
+  state.followsInput = true;
+  refreshTransport();
+});
+el("demo-btn").addEventListener("click", async () => {
+  if (state.monitoring) stopMonitoring();
+  state.demo = !state.demo;
+  clearTrace();
+  refreshTransport();
+  if (state.demo) {
+    // Switching the demo on starts it immediately — there is nothing to ask
+    // permission for.
+    await startMonitoring();
+  }
+  // Switching the demo off just stops: reaching for the microphone here would
+  // spring a permission prompt nobody asked for. refreshTransport brings the
+  // start button back.
+});
+el("zoom-in-btn").addEventListener("click", () => {
+  state.secondsVisible = Math.max(1.5, state.secondsVisible / 1.6);
+});
+el("zoom-out-btn").addEventListener("click", () => {
+  state.secondsVisible = Math.min(30, state.secondsVisible * 1.6);
+});
+el("record-btn").addEventListener("click", () => {
+  if (state.recording) finishRecording(); else startRecording();
+});
+el("play-btn").addEventListener("click", () => {
+  if (!recordedBlobURL) return;
+  if (playbackAudio && !playbackAudio.paused) {
+    playbackAudio.pause();
+    return;
+  }
+  playbackAudio = playbackAudio || new Audio();
+  playbackAudio.src = recordedBlobURL;
+  playbackAudio.play();
+});
+/* Handing the viewer a file.
+
+   When this page is open as a published Artifact it cannot start a download
+   itself, so the save goes through the host, which asks the viewer to
+   confirm. Opened as an ordinary page — a local file, or on a phone over
+   HTTPS — a plain anchor is the only route available. Try the host first and
+   fall back, so one export path serves both. */
+async function offerFile(filename, data, mime) {
+  let downloads = null;
+  try {
+    if (window.claude && typeof window.claude.use === "function") {
+      downloads = await window.claude.use("downloads");
+    }
+  } catch (error) { downloads = null; }
+
+  if (downloads) {
+    try {
+      await downloads.save({ filename, data: new Blob([data], { type: mime }) });
+      return { ok: true };
+    } catch (error) {
+      const code = error && error.code;
+      // The viewer declining is an answer, not a failure.
+      if (code === "declined") return { ok: true };
+      if (code === "rejected_extension" || code === "extension_not_enabled") {
+        return { ok: false, reason: "format" };
+      }
+      return { ok: false, reason: "failed" };
+    }
+  }
+
+  const url = URL.createObjectURL(new Blob([data], { type: mime }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+  return { ok: true };
+}
+
+/* The melody as a table: one row per detected note, with how far off each
+   one sat. Useful on its own, and it is the export that always works. */
+function buildNoteCSV(notes, reference) {
+  const rows = [
+    ["note", "midi", "start_seconds", "end_seconds", "duration_seconds",
+     "cents_from_target", "target_hz", "reference_a4_hz"].join(",")
+  ];
+  for (const note of notes) {
+    rows.push([
+      tuning.noteLabel(note.midiNote),
+      note.midiNote,
+      note.startTime.toFixed(3),
+      note.endTime.toFixed(3),
+      (note.endTime - note.startTime).toFixed(3),
+      note.averageCents.toFixed(1),
+      tuning.frequency(note.midiNote).toFixed(2),
+      reference.toFixed(2)
+    ].join(","));
+  }
+  return rows.join("\n") + "\n";
+}
+
+function exportSheet(message) {
+  return `
+    <header><h1>Export melody</h1>
+      <button onclick="window.__ntp.hideSheet()">Done</button></header>
+    <div class="card">
+      <h3>${state.notes.length} note${state.notes.length === 1 ? "" : "s"} detected
+          at A = ${formatHz(tuning.referenceA4)} Hz</h3>
+      <button class="wide-btn" onclick="window.__ntp.exportMIDI()"
+              style="margin-top:4px">Standard MIDI file (.mid)</button>
+      <button class="wide-btn" onclick="window.__ntp.exportCSV()">Note list (.csv)</button>
+      ${message ? `<p class="explain" style="margin-top:12px">${message}</p>` : ""}
+    </div>
+    <div class="card">
+      <div class="explain">
+        <p>MIDI note numbers carry no absolute pitch of their own, and almost
+        every instrument that reads them assumes A = 440. When your reference
+        is something else, the exported file also carries a pitch bend that
+        shifts playback to the pitch you actually sang${
+          Math.abs(tuning.referenceA4 - 440) < 0.01
+            ? " — not needed at A = 440, so none is written."
+            : `, here ${(1200 * Math.log2(tuning.referenceA4 / 440)).toFixed(1)} cents.`}</p>
+      </div>
+    </div>`;
+}
+
+el("export-btn").addEventListener("click", () => showSheet(exportSheet("")));
+
+// Starting the microphone has to come from a real tap. Both controls below
+// are ordinary buttons for that reason; the roll itself deliberately does not
+// start anything, so dragging it can never spring a permission prompt.
+async function startListening() {
+  if (state.demo) {
+    state.demo = false;
+    stopDemoSource();
+    if (state.monitoring) stopMonitoring();
+    clearTrace();
+  }
+  await startMonitoring();
+}
+
+el("start-btn").addEventListener("click", startListening);
+el("mic-btn").addEventListener("click", () => {
+  if (state.monitoring) stopMonitoring(); else startListening();
+});
+
+window.addEventListener("resize", resizeCanvases);
+window.addEventListener("orientationchange", () => setTimeout(resizeCanvases, 120));
+
+restoreTuning();
+loadTakes();
+refreshTuningLabel();
+refreshTransport();
+updateReadout();
+resizeCanvases();
+requestAnimationFrame(frame);
+</script>
