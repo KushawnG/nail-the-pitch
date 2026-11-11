@@ -730,8 +730,10 @@ class PitchDetector {
     this.minFrequency = 62;
     this.maxFrequency = 2300;
     this.amplitudeThreshold = 0.0025;
-    this.clarityThreshold = 0.55;
+    this.clarityThreshold = 0.5;
     this.peakRatio = 0.85;
+    // Whether the previous frame was accepted; drives the hysteresis below.
+    this.voiced = false;
   }
 
   estimate(samples) {
@@ -753,7 +755,14 @@ class PitchDetector {
     this.imag.fill(0, n);
 
     const amplitude = Math.sqrt(sumSquares / n);
-    if (amplitude < this.amplitudeThreshold) {
+    // Hysteresis on both gates: a note already being tracked may get quieter
+    // and breathier before it is dropped than a new one must be to start.
+    // With one fixed threshold a sustained note that drifts across it
+    // flickers on and off, which reads as the tracker losing the singer.
+    const amplitudeGate = this.voiced
+      ? this.amplitudeThreshold * 0.5 : this.amplitudeThreshold;
+    if (amplitude < amplitudeGate) {
+      this.voiced = false;
       return { frequency: null, clarity: 0, amplitude };
     }
 
@@ -778,13 +787,20 @@ class PitchDetector {
     }
 
     const peak = this.selectPeak(tauMin, tauMax);
-    if (!peak) return { frequency: null, clarity: 0, amplitude };
+    if (!peak) {
+      this.voiced = false;
+      return { frequency: null, clarity: 0, amplitude };
+    }
 
     const frequency = this.sampleRate / peak.lag;
+    const clarityGate = this.voiced
+      ? this.clarityThreshold - 0.12 : this.clarityThreshold;
     if (frequency < this.minFrequency || frequency > this.maxFrequency
-        || peak.value < this.clarityThreshold) {
+        || peak.value < clarityGate) {
+      this.voiced = false;
       return { frequency: null, clarity: Math.max(0, peak.value), amplitude };
     }
+    this.voiced = true;
     return { frequency, clarity: Math.min(1, peak.value), amplitude };
   }
 
@@ -842,7 +858,11 @@ class PitchTracker {
   constructor() {
     this.medianWindow = 5;
     this.onsetFrames = 2;
-    this.releaseFrames = 3;
+    // Frames to hold the last pitch through an unvoiced stretch. At the
+    // browser's ~60 analyses a second this is about 130 ms — long enough to
+    // bridge a consonant or a quick breath, short enough that a real pause
+    // still ends the line.
+    this.releaseFrames = 8;
     this.anchorHz = 440;
     this.reset();
   }
@@ -877,7 +897,7 @@ class PitchTracker {
     let measured = this.toCents(estimate.frequency);
     if (this.lastCents !== null) {
       for (const octave of [-1200, 1200]) {
-        if (Math.abs(measured - this.lastCents - octave) < 40) {
+        if (Math.abs(measured - this.lastCents - octave) < 60) {
           measured -= octave;
           break;
         }
@@ -1056,10 +1076,14 @@ const state = {
   recording: false,
   demo: false,
   elapsed: 0,
-  lowestNote: 45,
-  highestNote: 81,
+  // Two octaves. Narrow enough that every lane is readable on a phone; the
+  // view follows the voice, so it does not need to show everything at once.
+  lowestNote: 48,
+  highestNote: 72,
   secondsVisible: 6,
   followsInput: true,
+  // Pitch-following pauses briefly after the user moves the view by hand.
+  autoCentrePausedUntil: 0,
   viewportStart: 0,
   pressedNote: null,
   // When sound was last loud enough to analyse. Lets the read-out tell the
@@ -1419,6 +1443,17 @@ function geometry(canvas) {
 const css = (name) => getComputedStyle(document.documentElement)
   .getPropertyValue(name).trim();
 
+/* Theme colours, read once. getComputedStyle forces a style flush, which is
+   too expensive to pay several times in every frame on a phone. */
+const TOKENS = {};
+function readTokens() {
+  for (const name of ["bg", "panel", "panel-raised", "lane-natural",
+                      "lane-accidental", "grid", "text", "text-dim",
+                      "text-faint", "accent", "off", "slightly-off"]) {
+    TOKENS[name] = css("--" + name);
+  }
+}
+
 function drawRoll() {
   const g = geometry(rollCanvas);
   const ctx = rollContext;
@@ -1427,9 +1462,10 @@ function drawRoll() {
 
   const lowest = Math.floor(state.lowestNote);
   const highest = Math.ceil(state.highestNote);
-  const laneNatural = css("--lane-natural");
-  const laneAccidental = css("--lane-accidental");
-  const gridColour = css("--grid");
+  const laneNatural = TOKENS["lane-natural"];
+  const laneAccidental = TOKENS["lane-accidental"];
+  const gridColour = TOKENS.grid;
+  const current = state.reading ? state.reading.nearest : null;
   const showDetail = g.laneHeight >= 6;
 
   for (let note = lowest; note <= highest; note++) {
@@ -1437,6 +1473,12 @@ function drawRoll() {
     if (top + g.laneHeight < 0 || top > g.height) continue;
     ctx.fillStyle = isAccidental(note) ? laneAccidental : laneNatural;
     ctx.fillRect(0, top, g.width, g.laneHeight);
+    // Tint the lane of the note being sung, in its accuracy colour, so the
+    // eye lands on the target without reading the keyboard.
+    if (note === current) {
+      ctx.fillStyle = rgbCSS(centsRGB(state.reading.cents), 0.1);
+      ctx.fillRect(0, top, g.width, g.laneHeight);
+    }
     if (showDetail) {
       const isOctave = ((note % 12) + 12) % 12 === 0;
       ctx.strokeStyle = isOctave ? "#3d4757" : gridColour;
@@ -1505,6 +1547,10 @@ function drawTrace(ctx, g) {
   // Batch the polyline into colour buckets: a handful of strokes instead of
   // one per sample.
   const buckets = Array.from({ length: BUCKET_COUNT }, () => []);
+  // Low-clarity stretches — breathy tone, the held pitch across a consonant —
+  // are drawn fainter rather than dropped, so the line stays continuous but
+  // is honest about where the detector was less sure.
+  const faintBuckets = Array.from({ length: BUCKET_COUNT }, () => []);
   let previous = null;
   let lastCents = 0;
 
@@ -1519,7 +1565,7 @@ function drawTrace(ctx, g) {
       const magnitude = Math.min(50, Math.abs(cents));
       const bucket = Math.min(BUCKET_COUNT - 1,
         Math.max(0, Math.floor((magnitude / 50) * (BUCKET_COUNT - 1))));
-      buckets[bucket].push(previous, point);
+      (sample.clarity < 0.7 ? faintBuckets : buckets)[bucket].push(previous, point);
     }
     previous = point;
   }
@@ -1527,22 +1573,26 @@ function drawTrace(ctx, g) {
   const bucketColour = (index) =>
     centsRGB((index / (BUCKET_COUNT - 1)) * 50);
 
-  for (const pass of [{ width: 7, alpha: 0.22 }, { width: 2.6, alpha: 1 }]) {
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-    ctx.lineWidth = pass.width;
-    for (let index = 0; index < BUCKET_COUNT; index++) {
-      const points = buckets[index];
-      if (!points.length) continue;
-      ctx.strokeStyle = rgbCSS(bucketColour(index), pass.alpha);
-      ctx.beginPath();
-      for (let i = 0; i < points.length; i += 2) {
-        ctx.moveTo(points[i].x, points[i].y);
-        ctx.lineTo(points[i + 1].x, points[i + 1].y);
+  const strokeSet = (set, widthScale, alphaScale) => {
+    for (const pass of [{ width: 7, alpha: 0.22 }, { width: 2.6, alpha: 1 }]) {
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.lineWidth = pass.width * widthScale;
+      for (let index = 0; index < BUCKET_COUNT; index++) {
+        const points = set[index];
+        if (!points.length) continue;
+        ctx.strokeStyle = rgbCSS(bucketColour(index), pass.alpha * alphaScale);
+        ctx.beginPath();
+        for (let i = 0; i < points.length; i += 2) {
+          ctx.moveTo(points[i].x, points[i].y);
+          ctx.lineTo(points[i + 1].x, points[i + 1].y);
+        }
+        ctx.stroke();
       }
-      ctx.stroke();
     }
-  }
+  };
+  strokeSet(faintBuckets, 0.75, 0.45);
+  strokeSet(buckets, 1, 1);
 
   // Live head.
   if (state.followsInput) {
@@ -1565,7 +1615,7 @@ function drawKeyboard() {
   const g = geometry(keyboardCanvas);
   const ctx = keyboardContext;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.fillStyle = css("--panel");
+  ctx.fillStyle = TOKENS.panel;
   ctx.fillRect(0, 0, g.width, g.height);
 
   const lowest = Math.floor(state.lowestNote);
@@ -1587,7 +1637,7 @@ function drawKeyboard() {
     const y = top + gap / 2;
 
     let fill;
-    if (note === state.pressedNote) fill = css("--accent");
+    if (note === state.pressedNote) fill = TOKENS.accent;
     else if (note === sung) fill = rgbCSS(centsRGB(state.reading.cents), 0.85);
     else if (accidental) fill = "#222730";
     else fill = "#d4dae2";
@@ -1641,8 +1691,35 @@ function analysisFrame() {
 
 let lastReadoutUpdate = 0;
 
+/* Keep the sung pitch on screen.
+
+   A soft box in the middle of the roll: while the pitch stays inside it the
+   view holds still, and when it crosses out, the view eases just far enough
+   to bring it back to the edge. Following every note exactly would make the
+   lanes swim; a fixed view makes the singer hunt for the line. This is the
+   camera a platform game uses, for the same reason. */
+function followPitch() {
+  if (!state.followsInput || !state.monitoring || !state.reading) return;
+  if (performance.now() < state.autoCentrePausedUntil) return;
+
+  const span = state.highestNote - state.lowestNote;
+  const margin = span * 0.28;
+  const pitch = state.reading.exact;
+
+  let targetLow = null;
+  if (pitch < state.lowestNote + margin) targetLow = pitch - margin;
+  else if (pitch > state.highestNote - margin) targetLow = pitch + margin - span;
+  if (targetLow === null) return;
+
+  targetLow = Math.max(NOTE_FLOOR, Math.min(NOTE_CEILING - span, targetLow));
+  const eased = state.lowestNote + (targetLow - state.lowestNote) * 0.14;
+  state.lowestNote = eased;
+  state.highestNote = eased + span;
+}
+
 function frame(timestamp) {
   analysisFrame();
+  followPitch();
   drawRoll();
   drawKeyboard();
   // The read-out text does not need 60 updates a second, and throttling it
@@ -1687,7 +1764,7 @@ function updateReadout() {
     noteOctave.textContent = "";
     centsText.textContent = state.monitoring ? listeningText() : "not listening";
     centsText.style.color = state.monitoring && isSilent()
-      ? css("--slightly-off") : css("--text-faint");
+      ? TOKENS["slightly-off"] : TOKENS["text-faint"];
     dot.classList.remove("visible");
     el("freq-measured").textContent = "— Hz";
     el("freq-target").textContent =
@@ -1696,7 +1773,7 @@ function updateReadout() {
 
   el("level").firstElementChild.style.width = `${Math.round(state.level * 100)}%`;
   el("level").firstElementChild.style.background =
-    state.level > 0.92 ? css("--off") : css("--accent");
+    state.level > 0.92 ? TOKENS.off : TOKENS.accent;
 
   if (state.recording) {
     const total = Math.floor(state.elapsed);
@@ -1812,6 +1889,9 @@ rollCanvas.addEventListener("pointermove", (event) => {
     Math.min(NOTE_CEILING - span, gesture.startLowest + semitones));
   state.lowestNote = low;
   state.highestNote = low + span;
+  // A deliberate look elsewhere should not be fought by the follow camera;
+  // it resumes a few seconds after the finger lifts.
+  if (Math.abs(dy) > 4) state.autoCentrePausedUntil = performance.now() + 3000;
 
   if (Math.abs(dx) > 10) {
     state.followsInput = false;
@@ -1821,14 +1901,22 @@ rollCanvas.addEventListener("pointermove", (event) => {
   }
 });
 for (const type of ["pointerup", "pointercancel"]) {
-  rollCanvas.addEventListener(type, () => { gesture = null; });
+  rollCanvas.addEventListener(type, () => {
+    if (gesture && gesture.moved) {
+      state.autoCentrePausedUntil = performance.now() + 3000;
+    }
+    gesture = null;
+  });
 }
 rollCanvas.addEventListener("dblclick", () => {
+  // Double tap: frame what has been sung, and hand control back to the camera.
   fitViewportToTrace();
+  state.autoCentrePausedUntil = 0;
 });
 rollCanvas.addEventListener("wheel", (event) => {
   event.preventDefault();
   zoomNotes(event.deltaY < 0 ? 1.12 : 1 / 1.12);
+  state.autoCentrePausedUntil = performance.now() + 3000;
 }, { passive: false });
 
 // Two-finger pinch to zoom the pitch range.
@@ -1851,6 +1939,7 @@ rollCanvas.addEventListener("touchmove", (event) => {
     low = Math.max(NOTE_FLOOR, Math.min(NOTE_CEILING - newSpan, low));
     state.lowestNote = low;
     state.highestNote = low + newSpan;
+    state.autoCentrePausedUntil = performance.now() + 3000;
   }
 }, { passive: false });
 rollCanvas.addEventListener("touchend", () => { pinchStart = null; }, { passive: true });
@@ -2162,6 +2251,7 @@ el("tuning-pill").addEventListener("click", () => showSheet(tuningSheet()));
 el("takes-btn").addEventListener("click", () => showSheet(takesSheet()));
 el("live-btn").addEventListener("click", () => {
   state.followsInput = true;
+  state.autoCentrePausedUntil = 0;
   refreshTransport();
 });
 el("demo-btn").addEventListener("click", async () => {
@@ -2308,6 +2398,7 @@ el("mic-btn").addEventListener("click", () => {
 window.addEventListener("resize", resizeCanvases);
 window.addEventListener("orientationchange", () => setTimeout(resizeCanvases, 120));
 
+readTokens();
 restoreTuning();
 loadTakes();
 refreshTuningLabel();
