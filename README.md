@@ -20,6 +20,10 @@ A microphone needs a secure page, which is why this is served over HTTPS.
 ## What it does
 
 - Live pitch tracking on a piano roll, coloured by how far off the note you are
+- The view follows your voice: it centres on you when a phrase starts and keeps
+  you on screen through leaps, so you never scroll to find yourself. Drag up or
+  down to look around and it stands down for a moment, then resumes; drag
+  sideways to scroll back through what you sang, and **Back to live** returns
 - Note name, cents sharp or flat, measured frequency and target frequency
 - A reference keyboard that sounds notes **at your chosen tuning**
 - Record a take, play it back, export the melody as MIDI or the notes as CSV

@@ -169,6 +169,30 @@
   #mic-btn.listening { background: rgba(63, 214, 140, 0.18); color: var(--in-tune); }
   #mic-btn.busy { opacity: 0.6; }
 
+  /* Shown only while the roll is scrolled back in time. It sits over the
+     roll, in the accent colour, because being stuck in review mode without
+     noticing was the most confusing state the app had. */
+  .float-live {
+    position: absolute;
+    right: 14px;
+    bottom: 14px;
+    z-index: 2;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 11px 15px;
+    border: none;
+    border-radius: 999px;
+    background: var(--accent);
+    color: #0b1220;
+    font: 600 14px/1 -apple-system, system-ui, sans-serif;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+    cursor: pointer;
+  }
+  .float-live svg { width: 15px; height: 15px; fill: currentColor; }
+  .float-live[hidden] { display: none; }
+  .float-live:active { transform: scale(0.97); }
+
   /* ---------- readout ---------- */
 
   #readout {
@@ -530,7 +554,6 @@
     <span id="take-time"><span class="dot"></span><span id="take-elapsed">0:00</span></span>
     <span id="loaded-name" style="font:400 12px/1 -apple-system,system-ui,sans-serif;color:var(--text-faint)"></span>
     <span class="spacer"></span>
-    <button class="pill highlight" id="live-btn" style="display:none">Live</button>
     <button class="pill" id="mic-btn" aria-pressed="false">
       <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor" aria-hidden="true"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3m5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11z"/></svg>
       <span id="mic-label">Mic off</span>
@@ -546,10 +569,14 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3m5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11z"/></svg>
         <span id="start-label">Start listening</span>
       </button>
-      <p>Then sing, and the line follows your pitch. Drag the roll to look
-         back, pinch to zoom, and touch the keyboard to hear a reference note
-         at your chosen tuning.</p>
+      <p>Then sing, and the view follows your voice. Drag sideways to look
+         back through what you sang, up or down to look around, pinch to
+         zoom, and hold a key to hear it at your chosen tuning.</p>
     </div>
+    <button id="live-btn" class="float-live" hidden>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 18l8.5-6L4 6v12zm9-12v12h2V6h-2z"/></svg>
+      Back to live
+    </button>
   </div>
 
   <div id="readout">
@@ -1084,6 +1111,12 @@ const state = {
   followsInput: true,
   // Pitch-following pauses briefly after the user moves the view by hand.
   autoCentrePausedUntil: 0,
+  // Where the camera is heading when it is recentring on a new phrase.
+  cameraTargetLow: null,
+  // Phrase tracking for the camera: when the voice last stopped, and
+  // whether the previous frame had a pitch.
+  voiceEndedAt: null,
+  hadReading: false,
   viewportStart: 0,
   pressedNote: null,
   // When sound was last loud enough to analyse. Lets the read-out tell the
@@ -1211,6 +1244,9 @@ function stopMonitoring() {
   state.reading = null;
   state.level = 0;
   state.lastSoundAt = null;
+  state.voiceEndedAt = null;
+  state.hadReading = false;
+  state.cameraTargetLow = null;
   refreshTransport();
 }
 
@@ -1309,6 +1345,9 @@ function clearTrace() {
   state.loadedName = null;
   tracker.reset();
   state.lastSoundAt = null;
+  state.voiceEndedAt = null;
+  state.hadReading = false;
+  state.cameraTargetLow = null;
   startTimestamp = audioContext ? audioContext.currentTime : 0;
   refreshTransport();
 }
@@ -1387,6 +1426,22 @@ function fitViewportToTrace() {
   }
   state.lowestNote = Math.max(NOTE_FLOOR, low);
   state.highestNote = Math.min(NOTE_CEILING, high);
+}
+
+/* How long the camera stands down after the view is moved by hand. */
+const CAMERA_PAUSE_MS = 2000;
+
+function setLowestNote(low) {
+  const span = state.highestNote - state.lowestNote;
+  const clamped = Math.max(NOTE_FLOOR, Math.min(NOTE_CEILING - span, low));
+  state.lowestNote = clamped;
+  state.highestNote = clamped + span;
+}
+
+/* The lowest visible note that puts a pitch in the middle of the view. */
+function centredLow(pitch) {
+  const span = state.highestNote - state.lowestNote;
+  return Math.max(NOTE_FLOOR, Math.min(NOTE_CEILING - span, pitch - span / 2));
 }
 
 function panNotes(semitones) {
@@ -1693,33 +1748,69 @@ let lastReadoutUpdate = 0;
 
 /* Keep the sung pitch on screen.
 
-   A soft box in the middle of the roll: while the pitch stays inside it the
-   view holds still, and when it crosses out, the view eases just far enough
-   to bring it back to the edge. Following every note exactly would make the
-   lanes swim; a fixed view makes the singer hunt for the line. This is the
-   camera a platform game uses, for the same reason. */
-function followPitch() {
-  if (!state.followsInput || !state.monitoring || !state.reading) return;
-  if (performance.now() < state.autoCentrePausedUntil) return;
+   Two behaviours. At the start of a phrase the voice is brought to the middle
+   of the view, unless it is already comfortably on screen — that is the
+   "go to where I am singing" moment. Mid-phrase the view only *contains* the
+   voice: a soft box in the centre, still while the pitch stays inside it,
+   easing just far enough to bring it back when it leaves. Recentring on every
+   note would make the lanes swim; never recentring leaves the voice hugging
+   an edge after a leap. The camera a platform game uses, for the same reason.
+
+   Moving the view by hand pauses this for CAMERA_PAUSE_MS; Back to live and a
+   double tap hand control straight back. */
+function followPitch(dt) {
+  const reading = state.reading;
+
+  // Phrase boundaries: a phrase starts when a pitch appears after a second or
+  // more of nothing. Tracked on every frame, following or not.
+  const phraseStart = reading && !state.hadReading
+    && (state.voiceEndedAt === null || state.elapsed - state.voiceEndedAt > 1.0);
+  if (!reading && state.hadReading) state.voiceEndedAt = state.elapsed;
+  state.hadReading = !!reading;
+
+  if (!state.followsInput || !state.monitoring
+      || performance.now() < state.autoCentrePausedUntil) {
+    state.cameraTargetLow = null;
+    return;
+  }
+  if (!reading) return;
 
   const span = state.highestNote - state.lowestNote;
-  const margin = span * 0.28;
-  const pitch = state.reading.exact;
+  const pitch = reading.exact;
 
-  let targetLow = null;
-  if (pitch < state.lowestNote + margin) targetLow = pitch - margin;
-  else if (pitch > state.highestNote - margin) targetLow = pitch + margin - span;
-  if (targetLow === null) return;
+  const inner = span * 0.25;
+  if (phraseStart
+      && (pitch < state.lowestNote + inner || pitch > state.highestNote - inner)) {
+    state.cameraTargetLow = centredLow(pitch);
+  }
 
-  targetLow = Math.max(NOTE_FLOOR, Math.min(NOTE_CEILING - span, targetLow));
-  const eased = state.lowestNote + (targetLow - state.lowestNote) * 0.14;
-  state.lowestNote = eased;
-  state.highestNote = eased + span;
+  let target = state.cameraTargetLow;
+  if (target !== null) {
+    if (Math.abs(target - state.lowestNote) < 0.02) {
+      state.cameraTargetLow = null;
+      return;
+    }
+  } else {
+    const margin = span * 0.28;
+    if (pitch < state.lowestNote + margin) target = pitch - margin;
+    else if (pitch > state.highestNote - margin) target = pitch + margin - span;
+    else return;
+    target = Math.max(NOTE_FLOOR, Math.min(NOTE_CEILING - span, target));
+  }
+
+  // Time-based easing, so it feels the same at 30 and 60 frames a second.
+  const k = 1 - Math.exp(-dt / 0.16);
+  setLowestNote(state.lowestNote + (target - state.lowestNote) * k);
 }
 
+let lastFrameTime = 0;
+
 function frame(timestamp) {
+  // Capped so a stall (tab switch, GC pause) cannot snap the camera.
+  const dt = lastFrameTime ? Math.min(0.1, (timestamp - lastFrameTime) / 1000) : 1 / 60;
+  lastFrameTime = timestamp;
   analysisFrame();
-  followPitch();
+  followPitch(dt);
   drawRoll();
   drawKeyboard();
   // The read-out text does not need 60 updates a second, and throttling it
@@ -1809,7 +1900,7 @@ function refreshTransport() {
   el("take-time").classList.toggle("visible", state.recording);
   el("loaded-name").textContent =
     !state.recording && state.loadedName ? state.loadedName : "";
-  el("live-btn").style.display = state.followsInput ? "none" : "inline-flex";
+  el("live-btn").hidden = state.followsInput;
   el("play-btn").disabled = !recordedBlobURL;
   el("export-btn").disabled = state.notes.length === 0;
   el("demo-btn").classList.toggle("highlight", state.demo);
@@ -1842,23 +1933,63 @@ function pointerNote(event, canvas) {
   return Math.round(g.note(event.clientY - rect.top));
 }
 
+/* The keyboard: hold a key to hear it, drag to move the view. Deciding which
+   by waiting a moment keeps a scroll from sounding a note — which the
+   microphone would then pick up and track instead of the singer. Once a note
+   is sounding, sliding is a glissando across the keys. */
+const KEY_HOLD_MS = 90;
+let keyGesture = null;
+
 keyboardCanvas.addEventListener("pointerdown", (event) => {
   keyboardCanvas.setPointerCapture(event.pointerId);
-  state.pressedNote = pointerNote(event, keyboardCanvas);
-  playReference(state.pressedNote);
+  const note = pointerNote(event, keyboardCanvas);
+  keyGesture = {
+    startY: event.clientY,
+    startLowest: state.lowestNote,
+    laneHeight: geometry(keyboardCanvas).laneHeight,
+    panning: false,
+    timer: setTimeout(() => {
+      if (!keyGesture || keyGesture.panning) return;
+      state.pressedNote = note;
+      playReference(note);
+    }, KEY_HOLD_MS)
+  };
 });
 keyboardCanvas.addEventListener("pointermove", (event) => {
-  if (state.pressedNote === null) return;
-  const note = pointerNote(event, keyboardCanvas);
-  if (note === state.pressedNote) return;
-  state.pressedNote = note;
-  playReference(note);
+  if (!keyGesture) return;
+
+  if (state.pressedNote !== null) {
+    const note = pointerNote(event, keyboardCanvas);
+    if (note !== state.pressedNote) {
+      state.pressedNote = note;
+      playReference(note);
+    }
+    return;
+  }
+
+  const dy = event.clientY - keyGesture.startY;
+  if (!keyGesture.panning && Math.abs(dy) > 8) {
+    keyGesture.panning = true;
+    clearTimeout(keyGesture.timer);
+  }
+  if (keyGesture.panning) {
+    // Content follows the finger: dragging down brings the higher notes down.
+    setLowestNote(keyGesture.startLowest + dy / Math.max(1, keyGesture.laneHeight));
+    state.autoCentrePausedUntil = performance.now() + CAMERA_PAUSE_MS;
+  }
 });
 for (const type of ["pointerup", "pointercancel", "pointerleave"]) {
   keyboardCanvas.addEventListener(type, () => {
-    if (state.pressedNote === null) return;
-    state.pressedNote = null;
-    stopReference();
+    if (!keyGesture) return;
+    clearTimeout(keyGesture.timer);
+    if (keyGesture.panning) {
+      state.autoCentrePausedUntil = performance.now() + CAMERA_PAUSE_MS;
+    }
+    keyGesture = null;
+    if (state.pressedNote !== null) {
+      state.pressedNote = null;
+      stopReference();
+    }
   });
 }
 
@@ -1869,41 +2000,47 @@ rollCanvas.addEventListener("pointerdown", (event) => {
     startY: event.clientY,
     startX: event.clientX,
     startLowest: state.lowestNote,
-    startViewport: state.followsInput
-      ? Math.max(0, state.elapsed - state.secondsVisible * CURSOR_RATIO)
-      : state.viewportStart,
+    startViewport: 0,
     laneHeight: g.laneHeight,
     width: g.width,
-    moved: false
+    axis: null          // decided from the first few pixels of movement
   };
 });
 rollCanvas.addEventListener("pointermove", (event) => {
   if (!gesture) return;
   const dy = event.clientY - gesture.startY;
   const dx = event.clientX - gesture.startX;
-  if (Math.abs(dy) > 4 || Math.abs(dx) > 4) gesture.moved = true;
 
-  const span = state.highestNote - state.lowestNote;
-  const semitones = -dy / Math.max(1, gesture.laneHeight);
-  const low = Math.max(NOTE_FLOOR,
-    Math.min(NOTE_CEILING - span, gesture.startLowest + semitones));
-  state.lowestNote = low;
-  state.highestNote = low + span;
-  // A deliberate look elsewhere should not be fought by the follow camera;
-  // it resumes a few seconds after the finger lifts.
-  if (Math.abs(dy) > 4) state.autoCentrePausedUntil = performance.now() + 3000;
+  // Lock to one axis once the finger has clearly moved. A vertical swipe on a
+  // phone always carries some sideways drift, and letting that drift count as
+  // a time-scrub was freezing the roll and switching the camera off when all
+  // the singer wanted was to look up or down.
+  if (!gesture.axis) {
+    if (Math.hypot(dx, dy) < 8) return;
+    gesture.axis = Math.abs(dx) > Math.abs(dy) * 1.2 ? "x" : "y";
+    if (gesture.axis === "x") {
+      // Entering scroll-back: freeze the window where it is right now.
+      gesture.startViewport = state.followsInput
+        ? Math.max(0, state.elapsed - state.secondsVisible * CURSOR_RATIO)
+        : state.viewportStart;
+      state.followsInput = false;
+      refreshTransport();
+    }
+  }
 
-  if (Math.abs(dx) > 10) {
-    state.followsInput = false;
+  if (gesture.axis === "y") {
+    // Content follows the finger: dragging down brings the higher notes down.
+    setLowestNote(gesture.startLowest + dy / Math.max(1, gesture.laneHeight));
+    state.autoCentrePausedUntil = performance.now() + CAMERA_PAUSE_MS;
+  } else {
     const seconds = (-dx / Math.max(1, gesture.width)) * state.secondsVisible;
     state.viewportStart = Math.max(0, gesture.startViewport + seconds);
-    refreshTransport();
   }
 });
 for (const type of ["pointerup", "pointercancel"]) {
   rollCanvas.addEventListener(type, () => {
-    if (gesture && gesture.moved) {
-      state.autoCentrePausedUntil = performance.now() + 3000;
+    if (gesture && gesture.axis === "y") {
+      state.autoCentrePausedUntil = performance.now() + CAMERA_PAUSE_MS;
     }
     gesture = null;
   });
@@ -1916,7 +2053,7 @@ rollCanvas.addEventListener("dblclick", () => {
 rollCanvas.addEventListener("wheel", (event) => {
   event.preventDefault();
   zoomNotes(event.deltaY < 0 ? 1.12 : 1 / 1.12);
-  state.autoCentrePausedUntil = performance.now() + 3000;
+  state.autoCentrePausedUntil = performance.now() + CAMERA_PAUSE_MS;
 }, { passive: false });
 
 // Two-finger pinch to zoom the pitch range.
@@ -1939,7 +2076,7 @@ rollCanvas.addEventListener("touchmove", (event) => {
     low = Math.max(NOTE_FLOOR, Math.min(NOTE_CEILING - newSpan, low));
     state.lowestNote = low;
     state.highestNote = low + newSpan;
-    state.autoCentrePausedUntil = performance.now() + 3000;
+    state.autoCentrePausedUntil = performance.now() + CAMERA_PAUSE_MS;
   }
 }, { passive: false });
 rollCanvas.addEventListener("touchend", () => { pinchStart = null; }, { passive: true });
@@ -2252,6 +2389,8 @@ el("takes-btn").addEventListener("click", () => showSheet(takesSheet()));
 el("live-btn").addEventListener("click", () => {
   state.followsInput = true;
   state.autoCentrePausedUntil = 0;
+  // Come straight back to the voice, not to wherever the view was left.
+  if (state.reading) state.cameraTargetLow = centredLow(state.reading.exact);
   refreshTransport();
 });
 el("demo-btn").addEventListener("click", async () => {
